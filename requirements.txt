@@ -1,0 +1,10 @@
+vector
+awkward
+numpy
+particle
+fastjet
+uproot
+hydra-core
+numba
+law
+luigi
