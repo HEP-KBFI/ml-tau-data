@@ -6,6 +6,9 @@ from omegaconf import DictConfig
 from pathlib import Path
 from typing import List, Dict, Any
 import subprocess, time
+import tqdm
+import awkward as ak
+import numpy as np
 
 
 def job_finished(job_id):
@@ -21,6 +24,35 @@ def monitor_jobs(job_ids: List[int]):
         jobs_finished = sum([job_finished(job_id) for job_id in job_ids])
         print(f"[{jobs_finished}/{len(job_ids)}] jobs finished")
         time.sleep(10)
+
+
+def split_train_test(data, split=0.8):
+    ndata = len(data)
+    ntrain = int(ndata * split)
+    data_train = data[:ntrain]
+    data_test = data[ntrain:]
+    print(f"N={ndata}, Ntrain={len(data_train)} Ntest={len(data_test)}")
+    return data_train, data_test
+
+
+def merge_files(output_dir: str, sample_name: str, columns=None):
+    ntupelized_paths = glob.glob(os.path.join(output_dir, "*.parquet"))
+    print(f"Merging ntupelized files for =={sample_name}== sample")
+    data = []
+    for fi in tqdm.tqdm(list(ntupelized_paths)):
+        ret = ak.from_parquet(fi, columns=columns)
+        ret = ak.Array({k: ret[k] for k in ret.fields})
+        data.append(ret)
+    data = ak.concatenate(data)
+
+    # shuffle data
+    perm = np.random.permutation(len(data))
+    data = data[perm]
+    data_train, data_test = split_train_test(data)
+    test_path = os.path.join(output_dir, f"{sample_name}_test.parquet")
+    train_path = os.path.join(output_dir, f"{sample_name}_train.parquet")
+    ak.to_parquet(data_test, test_path, row_group_size=1024)
+    ak.to_parquet(data_train, train_path, row_group_size=1024)
 
 
 class NtupelizerOrchestrator:
@@ -45,6 +77,7 @@ class NtupelizerOrchestrator:
             )
             job_ids.append(job_id)
         monitor_jobs(job_ids=job_ids)
+        merge_files(output_dir=output_dir, sample_name=sample_name)
 
     def run(self):
         datasets = self.cfg.samples.keys()
@@ -100,10 +133,6 @@ class NtupelizerOrchestrator:
 
         # Submit job
         cmd = ["sbatch", str(job_script_path)]
-        # result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        # print(result.stderr)
-        # print(result.stdout)
-
         try:
             result = subprocess.run(
                 cmd,
@@ -119,9 +148,6 @@ class NtupelizerOrchestrator:
             print("sbatch failed!")
             print("stdout:", e.stdout)
             print("stderr:", e.stderr)
-
-        # job_id = result.stdout.strip().split()[-1]
-        # return job_id
 
 
 @hydra.main(
