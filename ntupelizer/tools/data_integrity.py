@@ -1,5 +1,5 @@
 """
-Validation plotting functions for ntupelizer output.
+Data integrity and validation functions for ntupelizer output.
 
 This module provides functions to visualize and validate the output
 from the ntupelizer.py ntupelize function.
@@ -12,7 +12,7 @@ import matplotlib as mpl
 from matplotlib.figure import Figure
 from typing import Optional, Dict
 
-from ntupelizer.tools.general import reinitialize_p4, to_bh, deltaphi
+from general import reinitialize_p4, to_bh, deltaphi
 
 try:
     import mplhep
@@ -195,7 +195,7 @@ def plot_jet_pt(
     if ax is None:
         fig, ax = plt.subplots(figsize=(7, 5.5))
 
-    jet_pt = reinitialize_p4(data["reco_jet_p4s"]).pt
+    jet_pt = reinitialize_p4(data["reco_jet_p4"]).pt
     if decaymode_mask is not None:
         jet_pt = jet_pt[decaymode_mask]
 
@@ -253,7 +253,6 @@ def plot_num_particles_per_jet(
     if ax is None:
         fig, ax = plt.subplots(figsize=(7, 5.5))
 
-    # Use reco_cand_p4s to count particles per jet
     num_particles = ak.num(data["reco_cand_p4s"])
 
     try:
@@ -365,7 +364,7 @@ def plot_2d_jet_shape(
     if bins is None:
         bins = np.linspace(-0.05, 0.05, 70)
 
-    reco_jet_p4s = reinitialize_p4(data["reco_jet_p4s"])
+    reco_jet_p4s = reinitialize_p4(data["reco_jet_p4"])
     reco_cand_p4s = reinitialize_p4(data["reco_cand_p4s"])
 
     delta_eta = reco_jet_p4s.eta - reco_cand_p4s.eta
@@ -436,26 +435,22 @@ def plot_jet_shapes_for_decay_modes(
     if decay_modes_of_interest is None:
         decay_modes_of_interest = [0, 1, 2, 3, 4]
 
-    # Dataset labels for titles
     dataset_labels = {
         "Z": r"$Z/\gamma \rightarrow \tau\tau$",
         "ZH": r"$ZH \rightarrow Z\tau\tau$",
     }
 
-    # Labels for remapped decay modes
     dm_labels = dict(REMAP_LABELS)
     dm_labels[0] = r"$\tau_{h1}$"
     dm_labels[3] = r"$\tau_{h3}$"
 
-    # Prepare data
-    reco_jet_p4s = reinitialize_p4(data["reco_jet_p4s"])
+    reco_jet_p4s = reinitialize_p4(data["reco_jet_p4"])
     reco_cand_p4s = reinitialize_p4(data["reco_cand_p4s"])
 
     delta_eta = reco_jet_p4s.eta - reco_cand_p4s.eta
     delta_phi = deltaphi(reco_jet_p4s.phi, reco_cand_p4s.phi)
     pt = reco_cand_p4s.pt
 
-    # Remap decay modes
     remapped_dm = remap_decaymodes(data["gen_jet_tau_decaymode"])
 
     axes = {}
@@ -468,17 +463,14 @@ def plot_jet_shapes_for_decay_modes(
             print(f"Warning: No jets found for decay mode {idx_dm}")
             continue
 
-        # Get title
         dm_label = dm_labels.get(idx_dm, f"DM{idx_dm}")
         dataset_label = dataset_labels.get(dataset_name, dataset_name)
         title = f"{dm_label} from {dataset_label}"
 
-        # Flatten data for this decay mode
         delta_eta_flat = ak.to_numpy(ak.flatten(delta_eta[mask]))
         delta_phi_flat = ak.to_numpy(ak.flatten(delta_phi[mask]))
         pt_flat = ak.to_numpy(ak.flatten(pt[mask]))
 
-        # Create figure
         fig, ax = plt.subplots(figsize=(5, 5))
 
         hist2d = ax.hist2d(
@@ -560,6 +552,120 @@ def plot_lifetime_variable(
         ax=ax,
         **kwargs,
     )
+
+
+def plot_reco_jet_energy(
+    data: ak.Array,
+    label: str = "Data",
+    bins: Optional[np.ndarray] = None,
+    ax: Optional[plt.Axes] = None,
+    save_path: Optional[str] = None,
+) -> plt.Axes:
+    """Plot 2D gen vs reco jet energy.
+
+    Args:
+        data: Ntupelizer output data
+        label: Dataset label for title
+        bins: Bin edges for both axes
+        ax: Matplotlib axes
+        save_path: Path to save figure
+
+    Returns:
+        Matplotlib axes object
+    """
+    gen_jet_en = ak.to_numpy(data["gen_jet_tau_vis_energy"])
+    reco_jet_p4 = reinitialize_p4(data["reco_jet_p4"])
+    reco_jet_en = ak.to_numpy(reco_jet_p4.energy)
+
+    valid = gen_jet_en != -1
+    gen_jet_en = gen_jet_en[valid]
+    reco_jet_en = reco_jet_en[valid]
+
+    if bins is None:
+        en_max = max(gen_jet_en.max(), reco_jet_en.max())
+        bins = np.linspace(0, en_max, 51)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 5.5))
+    else:
+        fig = ax.figure
+
+    hist2d = ax.hist2d(
+        gen_jet_en,
+        reco_jet_en,
+        bins=bins,
+        norm=mpl.colors.LogNorm(),
+        cmap="viridis",
+    )
+
+    ax.set_xlabel("Gen visible tau energy [GeV]")
+    ax.set_ylabel("Reco jet energy [GeV]")
+    ax.set_title(f"{label} jet energy", fontsize=12)
+
+    cbar = plt.colorbar(hist2d[3], ax=ax)
+    cbar.set_label("Number of jets")
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches="tight")
+
+    return ax
+
+
+def plot_reco_vs_gen_cand_energy(
+    data: ak.Array,
+    label: str = "Data",
+    bins: Optional[np.ndarray] = None,
+    ax: Optional[plt.Axes] = None,
+    save_path: Optional[str] = None,
+) -> plt.Axes:
+    """Plot 2D gen vs reco candidate energy.
+
+    Args:
+        data: Ntupelizer output data
+        label: Dataset label for title
+        bins: Bin edges for both axes
+        ax: Matplotlib axes
+        save_path: Path to save figure
+
+    Returns:
+        Matplotlib axes object
+    """
+    gen_energy = ak.to_numpy(ak.flatten(data["reco_cand_matched_gen_energy"]))
+    reco_cand_p4 = reinitialize_p4(data["reco_cand_p4s"])
+    reco_energy = ak.to_numpy(ak.flatten(reco_cand_p4.energy))
+
+    valid = gen_energy != -1
+    gen_energy = gen_energy[valid]
+    reco_energy = reco_energy[valid]
+
+    if bins is None:
+        en_max = max(gen_energy.max(), reco_energy.max())
+        bins = np.linspace(0, en_max, 51)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 5.5))
+    else:
+        fig = ax.figure
+
+    hist2d = ax.hist2d(
+        gen_energy,
+        reco_energy,
+        bins=bins,
+        norm=mpl.colors.LogNorm(),
+        cmap="viridis",
+    )
+
+    ax.set_xlabel("Matched gen energy [GeV]")
+    ax.set_ylabel("Reco candidate energy [GeV]")
+    ax.set_title(f"{label} candidate energy", fontsize=12)
+
+    cbar = plt.colorbar(hist2d[3], ax=ax)
+    cbar.set_label("Number of candidates")
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches="tight")
+
+    return ax
 
 
 # =============================================================================
@@ -687,7 +793,7 @@ def compare_decay_modes(
 
 
 # =============================================================================
-# Master validation function
+# Master validation functions
 # =============================================================================
 
 
@@ -756,6 +862,22 @@ def validate_ntupelizer_output(
             if output_dir:
                 fig.savefig(f"{output_dir}/{var}.pdf", bbox_inches="tight")
 
+    # 6. Gen vs reco jet energy (if fields present)
+    if "gen_jet_tau_vis_energy" in data.fields:
+        fig, ax = plt.subplots(figsize=(6, 5.5))
+        plot_reco_jet_energy(data, label=label, ax=ax)
+        figures["reco_jet_energy"] = fig
+        if output_dir:
+            fig.savefig(f"{output_dir}/reco_jet_energy.pdf", bbox_inches="tight")
+
+    # 7. Gen vs reco candidate energy (if fields present)
+    if "reco_cand_matched_gen_energy" in data.fields:
+        fig, ax = plt.subplots(figsize=(6, 5.5))
+        plot_reco_vs_gen_cand_energy(data, label=label, ax=ax)
+        figures["reco_cand_energy"] = fig
+        if output_dir:
+            fig.savefig(f"{output_dir}/reco_cand_energy.pdf", bbox_inches="tight")
+
     if not show_plots:
         plt.close("all")
 
@@ -802,7 +924,6 @@ def validate_multiple_datasets(
     # 4. Compare lifetime variables
     lifetime_vars = ["reco_cand_dxy", "reco_cand_dz"]
     for var in lifetime_vars:
-        # Check if variable exists in all datasets
         if all(var in data.fields for data in datasets.values()):
             fig = compare_distributions(
                 datasets,

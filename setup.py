@@ -9,6 +9,8 @@ CORE_DEPS = [
     "luigi",
     "jinja2",
     "omegaconf",
+    "snakemake>=7,<8",
+    "pulp>=2.7,<3",
 ]
 
 # Full dependencies for running the actual ntupelization

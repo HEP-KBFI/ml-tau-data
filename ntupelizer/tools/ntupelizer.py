@@ -223,7 +223,9 @@ class EDM4HEPNtupelizer:
         # =====================================================================
         combined_dict = {
             # Reco jet p4s
-            "reco_jet_p4s": reco_jets,
+            "reco_jet_p4": reco_jets,
+            # Gen jet p4s
+            "gen_jet_p4": gen_jets,
             # Reco candidate p4s, pdgs and charges (jet constituents)
             "reco_cand_p4s": reco_cand_p4s,
             "reco_cand_pdgs": reco_cand_pdgs,
@@ -250,7 +252,7 @@ class EDM4HEPNtupelizer:
         data = ak.Array({key: data[key][hadronic_jet_mask] for key in data.fields})
         removal_mask = data.gen_jet_tau_decaymode != 16
         if signal_sample:
-            removal_mask = (data.gen_jet_tau_decaymode != -1) | removal_mask
+            removal_mask = (data.gen_jet_tau_decaymode != -1) & removal_mask
         print(f"{np.sum(removal_mask)} jets after masking")
         data = ak.Record({key: data[key][removal_mask] for key in data.fields})
         ak.to_parquet(ak.Record(data), output_path)

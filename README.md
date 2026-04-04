@@ -29,3 +29,14 @@ pip install --upgrade pip
 pip install -e ".[full]"
 ```
 
+If an existing Snakemake install fails with an error like
+`AttributeError: module 'pulp' has no attribute 'list_solvers'`, the
+environment has an incompatible `pulp` version. This repo expects:
+
+```bash
+pip install "snakemake>=7,<8" "pulp>=2.7,<3"
+```
+
+When running from the repo root, `sitecustomize.py` also adds a small
+compatibility shim for older PuLP releases that expose `listSolvers()`
+instead of `list_solvers()`.

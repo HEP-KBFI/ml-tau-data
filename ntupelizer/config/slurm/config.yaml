@@ -1,0 +1,24 @@
+# SLURM executor profile for Snakemake 7.x
+# Usage: snakemake --profile workflow/profiles/slurm
+
+cluster: >-
+  sbatch
+  --parsable
+  --output=logs/slurm/{rule}_{wildcards}_%j.out
+  --error=logs/slurm/{rule}_{wildcards}_%j.err
+  --job-name=smk-{rule}
+  --time={resources.runtime}
+  --mem={resources.mem_mb}M
+  --cpus-per-task={resources.cpus}
+
+default-resources:
+  - runtime=120
+  - mem_mb=8000
+  - cpus=1
+
+cluster-status: "ntupelizer/scripts/slurm_status.py"
+cluster-cancel: "scancel"
+max-jobs-per-second: 2
+max-status-checks-per-second: 5
+latency-wait: 60
+restart-times: 1

@@ -1,0 +1,11 @@
+weighting:
+  variables:
+    pt:
+      range: [20, 200]
+      n_bins: 45
+    eta:
+      range: [-2.8, 2.8]
+      n_bins: 27
+    theta:
+      range: [10, 170]
+      n_bins: 41
