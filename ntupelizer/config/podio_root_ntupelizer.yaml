@@ -1,0 +1,164 @@
+slurm_run: False
+files_per_job: 20
+n_files: -1
+n_files_per_sample: -1  # Limit per sample, -1 for all files
+tree_path: events
+reco_particles_collection: PandoraPFOs
+mc_particles_collection: MCParticles
+track_collection: SiTracks_Refitted
+vertex_collection: PrimaryVertices
+idx_map_branch: idx_mc
+add_event_level_variables_per_jet: False
+include_lifetime_variables: true
+branches: 
+  # MC particles
+  - "MCParticles.PDG"
+  - "MCParticles.generatorStatus"
+  - "MCParticles.simulatorStatus"
+  - "MCParticles.charge"
+  - "MCParticles.time"
+  - "MCParticles.mass"
+  - "MCParticles.vertex.x"
+  - "MCParticles.vertex.y"
+  - "MCParticles.vertex.z"
+  - "MCParticles.endpoint.x"
+  - "MCParticles.endpoint.y"
+  - "MCParticles.endpoint.z"
+  - "MCParticles.momentum.x"
+  - "MCParticles.momentum.y"
+  - "MCParticles.momentum.z"
+  - "MCParticles.momentumAtEndpoint.x"
+  - "MCParticles.momentumAtEndpoint.y"
+  - "MCParticles.momentumAtEndpoint.z"
+  - "MCParticles.spin.x"
+  - "MCParticles.spin.y"
+  - "MCParticles.spin.z"
+  - "MCParticles.colorFlow.a"
+  - "MCParticles.colorFlow.b"
+  - "MCParticles.parents_begin"
+  - "MCParticles.parents_end"
+  - "MCParticles.daughters_begin"
+  - "MCParticles.daughters_end"
+  # Reconstructed particles (Pandora PFOs ≈ old MergedRecoParticles)
+  - "PandoraPFOs.PDG"
+  - "PandoraPFOs.energy"
+  - "PandoraPFOs.momentum.x"
+  - "PandoraPFOs.momentum.y"
+  - "PandoraPFOs.momentum.z"
+  - "PandoraPFOs.referencePoint.x"
+  - "PandoraPFOs.referencePoint.y"
+  - "PandoraPFOs.referencePoint.z"
+  - "PandoraPFOs.charge"
+  - "PandoraPFOs.mass"
+  - "PandoraPFOs.goodnessOfPID"
+  - "PandoraPFOs.covMatrix.values[10]"
+  - "PandoraPFOs.clusters_begin"
+  - "PandoraPFOs.clusters_end"
+  - "PandoraPFOs.tracks_begin"
+  - "PandoraPFOs.tracks_end"
+  - "PandoraPFOs.particles_begin"
+  - "PandoraPFOs.particles_end"
+  # Refitted tracks
+  - "SiTracks_Refitted.type"
+  - "SiTracks_Refitted.chi2"
+  - "SiTracks_Refitted.ndf"
+  - "SiTracks_Refitted.Nholes"
+  - "SiTracks_Refitted.subdetectorHitNumbers_begin"
+  - "SiTracks_Refitted.subdetectorHitNumbers_end"
+  - "SiTracks_Refitted.subdetectorHoleNumbers_begin"
+  - "SiTracks_Refitted.subdetectorHoleNumbers_end"
+  - "SiTracks_Refitted.trackStates_begin"
+  - "SiTracks_Refitted.trackStates_end"
+  - "SiTracks_Refitted.trackerHits_begin"
+  - "SiTracks_Refitted.trackerHits_end"
+  - "SiTracks_Refitted.tracks_begin"
+  - "SiTracks_Refitted.tracks_end"
+  - "_SiTracks_Refitted_trackerHits.index"
+  - "_SiTracks_Refitted_trackerHits.collectionID"
+  - "_SiTracks_Refitted_tracks.index"
+  - "_SiTracks_Refitted_tracks.collectionID"
+  - "_SiTracks_Refitted_subdetectorHitNumbers"
+  - "_SiTracks_Refitted_subdetectorHoleNumbers"
+  - "_SiTracks_Refitted_trackStates.location"
+  - "_SiTracks_Refitted_trackStates.D0"
+  - "_SiTracks_Refitted_trackStates.phi"
+  - "_SiTracks_Refitted_trackStates.omega"
+  - "_SiTracks_Refitted_trackStates.Z0"
+  - "_SiTracks_Refitted_trackStates.tanLambda"
+  - "_SiTracks_Refitted_trackStates.time"
+  - "_SiTracks_Refitted_trackStates.referencePoint.x"
+  - "_SiTracks_Refitted_trackStates.referencePoint.y"
+  - "_SiTracks_Refitted_trackStates.referencePoint.z"
+  - "_SiTracks_Refitted_trackStates.covMatrix.values[21]"
+  # Primary vertices
+  - "PrimaryVertices.position.x"
+  - "PrimaryVertices.position.y"
+  - "PrimaryVertices.position.z"
+  # Reco ↔ MC truth association
+  - "_RecoMCTruthLink_from.index"
+  - "_RecoMCTruthLink_to.index"
+  - "RecoMCTruthLink.weight"
+  # Reco ↔ track association
+  - "_PandoraPFOs_tracks.index"
+  - "_PandoraPFOs_tracks.collectionID"
+lifetime_vars:
+  - dxy
+  - dz
+  - d3
+  - d0
+  - z0
+  - dxy_2d
+  - dz_2d
+  - d3_2d
+  - pca_x
+  - pca_y
+  - pca_z
+  - vertex_x
+  - vertex_y
+  - vertex_z
+  - phi0
+  - tanL
+  - omega
+  - dxy_error
+  - dz_error
+  - d3_error
+  - d0_error
+  - z0_error
+  - dxy_2d_error
+  - dz_2d_error
+  - d3_2d_error
+  - pca_x_error
+  - pca_y_error
+  - pca_z_error
+signed_lifetime_vars:
+  - dxy
+  - dz
+  - d3
+  - d0
+  - z0
+  - dxy_2d
+  - dz_2d
+  - d3_2d
+samples_to_process:
+  - p8_ee_Z_Ztautau_ecm380
+slurm:
+  job_name: "tau_ntupelizer"
+  partition: main
+  walltime: "00:15:00"
+  memory: 2000
+  cpus_per_task: 1
+  nodes: 1
+  ntasks: 1
+samples:
+  p8_ee_Z_qq_ecm91:
+    input_dir: /local/joosep/mlpf/cld/v1.2.5_key4hep_2025-05-29/gen/p8_ee_Z_qq_ecm91/root/
+    output_dir: /scratch/persistent/laurits/ml-tau/cld/v1.2.5_key4hep_2025-05-29/p8_ee_Z_qq_ecm91/
+    is_signal: False
+  p8_ee_Z_tautau_ecm91:
+    input_dir: /local/joosep/mlpf/cld/v1.2.5_key4hep_2025-05-29/gen/p8_ee_Z_tautau_ecm91/root/
+    output_dir: /scratch/persistent/laurits/ml-tau/cld/v1.2.5_key4hep_2025-05-29/p8_ee_Z_tautau_ecm91/
+    is_signal: True
+validation:
+  output_dir: $HOME/podio_ntuple_validation
+  validation_samples:
+    - p8_ee_Z_Ztautau_ecm380

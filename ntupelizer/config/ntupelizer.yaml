@@ -1,0 +1,13 @@
+# @package _global_
+# config_choice: "old"  # "old" for legacy ntupelizer, "new" for podio/edm4hep
+defaults:
+  - ntupelizer_base: new
+
+
+# Override parameters here if needed
+# input_dir: "/custom/path"  
+# output_dir: "/custom/output"
+
+# This config can be overridden via command line:
+# python script.py config_type=new
+# python script.py config_type=old
