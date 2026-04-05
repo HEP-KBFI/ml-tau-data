@@ -4,21 +4,25 @@
 cluster: >-
   sbatch
   --parsable
+  --export=ALL
   --output=logs/slurm/{rule}_{wildcards}_%j.out
   --error=logs/slurm/{rule}_{wildcards}_%j.err
+  --partition=main9
   --job-name=smk-{rule}
   --time={resources.runtime}
   --mem={resources.mem_mb}M
   --cpus-per-task={resources.cpus}
 
 default-resources:
-  - runtime=120
-  - mem_mb=8000
+  - runtime=15
+  - mem_mb=2000
   - cpus=1
 
 cluster-status: "ntupelizer/scripts/slurm_status.py"
 cluster-cancel: "scancel"
-max-jobs-per-second: 2
+jobscript: "ntupelizer/config/slurm/jobscript.sh"
+jobs: unlimited
+max-jobs-per-second: 50
 max-status-checks-per-second: 5
 latency-wait: 60
 restart-times: 1

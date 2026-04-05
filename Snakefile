@@ -98,6 +98,12 @@ def ntupelized_files_for(dataset):
 # expand() is a Snakemake helper that produces the cross-product of all
 # wildcard values, e.g. for two datasets it yields:
 #   [f"{OUTPUT_DIR}/z_91gev/validation.done", f"{OUTPUT_DIR}/qq_91gev/validation.done"]
+# Rules listed here always run on the local machine even when --profile slurm
+# is active. ntupelize (one job per ROOT file) is the only rule submitted to
+# SLURM — everything else is fast enough to run locally.
+localrules: all, compute_weights, validation
+
+
 rule all:
     input:
         [f"{OUTPUT_DIR}/{SHORT_NAMES[ds]}_{split}.parquet" for ds in DATASETS for split in SPLITS],
@@ -167,6 +173,7 @@ for _ds, _cfg in DATASETS.items():
     _short = SHORT_NAMES[_ds]
     rule:
         name: f"merge_and_split_{_ds}"
+        localrule: True
         input:
             # Capture _ds in the default arg to avoid the Python late-binding
             # closure problem inside a for-loop.
@@ -236,6 +243,7 @@ for _ds, _cfg in DATASETS.items():
     for _split in SPLITS:
         rule:
             name: f"apply_weights_{_ds}_{_split}"
+            localrule: True
             input:
                 split    = f"{OUTPUT_DIR}/{_ds}/split/{_short}_{_split}.parquet",
                 sig_w    = f"{WEIGHTS_DIR}/sig_weights.npy",

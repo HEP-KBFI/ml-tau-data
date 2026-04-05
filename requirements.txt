@@ -12,5 +12,5 @@ tqdm
 pyarrow
 pandas
 snakemake>=7,<8
-pulp>=pulp<2.8
+pulp<2.8
 docopt
