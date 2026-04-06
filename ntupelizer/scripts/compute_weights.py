@@ -63,7 +63,7 @@ if __name__ == "__main__":
         cfg = compose(config_name="weighting")
 
     wcfg = cfg.weighting
-    pt_edges = build_bin_edges(wcfg.variables.pt)
+    p_edges = build_bin_edges(wcfg.variables.p)
     theta_edges = build_bin_edges(wcfg.variables.theta)
 
     # ── load data ─────────────────────────────────────────────────────────────
@@ -74,16 +74,16 @@ if __name__ == "__main__":
     sig_matrix = wt.create_matrix(
         data=sig_data,
         y_bin_edges=theta_edges,
-        x_bin_edges=pt_edges,
+        x_bin_edges=p_edges,
         y_property="theta",
-        x_property="pt",
+        x_property="p",
     )
     bkg_matrix = wt.create_matrix(
         data=bkg_data,
         y_bin_edges=theta_edges,
-        x_bin_edges=pt_edges,
+        x_bin_edges=p_edges,
         y_property="theta",
-        x_property="pt",
+        x_property="p",
     )
 
     # ── compute weight matrices ────────────────────────────────────────────────
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     np.save(bkg_out, bkg_weight_matrix)
 
     # Save bin edges alongside so apply_weights.py can reconstruct the lookup
-    np.save(os.path.join(output_dir, "pt_edges.npy"), pt_edges)
+    np.save(os.path.join(output_dir, "p_edges.npy"), p_edges)
     np.save(os.path.join(output_dir, "theta_edges.npy"), theta_edges)
 
     print(f"Saved signal weight matrix  → {sig_out}")
@@ -111,16 +111,11 @@ if __name__ == "__main__":
 
     # ── optional plots ─────────────────────────────────────────────────────────
     if produce_plots:
-        wt.visualize_weights(
-            weight_matrix=sig_weight_matrix,
-            x_bin_edges=pt_edges,
+        wt.visualize_weights_pair(
+            sig_matrix=sig_weight_matrix,
+            bkg_matrix=bkg_weight_matrix,
+            x_bin_edges=p_edges,
             y_bin_edges=theta_edges,
-            output_path=os.path.join(output_dir, "sig_weight_matrix.pdf"),
-        )
-        wt.visualize_weights(
-            weight_matrix=bkg_weight_matrix,
-            x_bin_edges=pt_edges,
-            y_bin_edges=theta_edges,
-            output_path=os.path.join(output_dir, "bkg_weight_matrix.pdf"),
+            output_path=os.path.join(output_dir, "weight_matrices.pdf"),
         )
         print("Saved diagnostic plots.")

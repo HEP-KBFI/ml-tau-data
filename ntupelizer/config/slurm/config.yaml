@@ -26,3 +26,5 @@ max-jobs-per-second: 50
 max-status-checks-per-second: 5
 latency-wait: 60
 restart-times: 1
+group-components:
+  - ntupelize=20

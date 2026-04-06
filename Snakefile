@@ -118,6 +118,7 @@ rule all:
 # form results/<dataset>/ntupelized/<stem>.root, and then looks for a rule
 # whose output pattern matches — which is this one.
 rule ntupelize:
+    group: "ntupelize"
     input:
         # Lambda functions receive a 'wildcards' object whose attributes are
         # the values captured from the output path of the rule that requested
@@ -213,7 +214,7 @@ rule compute_weights:
     output:
         sig_w    = f"{WEIGHTS_DIR}/sig_weights.npy",
         bkg_w    = f"{WEIGHTS_DIR}/bkg_weights.npy",
-        pt_edges = f"{WEIGHTS_DIR}/pt_edges.npy",
+        p_edges  = f"{WEIGHTS_DIR}/p_edges.npy",
         th_edges = f"{WEIGHTS_DIR}/theta_edges.npy",
     params:
         output_dir     = WEIGHTS_DIR,
@@ -236,37 +237,39 @@ rule compute_weights:
 
 
 # ── stage 3b : apply weights to every split ──────────────────────────────────
-# One rule per (dataset, split) because the output filename uses short_name
-# which is a config value, not a Snakemake wildcard.
-for _ds, _cfg in DATASETS.items():
-    _short = SHORT_NAMES[_ds]
-    for _split in SPLITS:
-        rule:
-            name: f"apply_weights_{_ds}_{_split}"
-            localrule: True
-            input:
-                split    = f"{OUTPUT_DIR}/{_ds}/split/{_short}_{_split}.parquet",
-                sig_w    = f"{WEIGHTS_DIR}/sig_weights.npy",
-                bkg_w    = f"{WEIGHTS_DIR}/bkg_weights.npy",
-                pt_edges = f"{WEIGHTS_DIR}/pt_edges.npy",
-                th_edges = f"{WEIGHTS_DIR}/theta_edges.npy",
-            output:
-                f"{OUTPUT_DIR}/{_short}_{_split}.parquet"
-            params:
-                weights_dir = WEIGHTS_DIR,
-                is_signal   = _cfg["is_signal"],
-                container   = CONTAINER,
-            resources:
-                mem_mb  = 8_000,
-                runtime = 30,
-            shell:
-                """
-                {params.container} python ntupelizer/scripts/apply_weights.py \
-                    -i {input.split} \
-                    -w {params.weights_dir} \
-                    -o {output} \
-                    --is-signal {params.is_signal}
-                """
+# One rule per split: applies signal and background weight matrices in a single
+# call and optionally produces a weight distribution plot.
+for _split in SPLITS:
+    rule:
+        name: f"apply_weights_{_split}"
+        localrule: True
+        input:
+            sig      = f"{OUTPUT_DIR}/{SIG_DATASET}/split/{SHORT_NAMES[SIG_DATASET]}_{_split}.parquet",
+            bkg      = f"{OUTPUT_DIR}/{BKG_DATASET}/split/{SHORT_NAMES[BKG_DATASET]}_{_split}.parquet",
+            sig_w    = f"{WEIGHTS_DIR}/sig_weights.npy",
+            bkg_w    = f"{WEIGHTS_DIR}/bkg_weights.npy",
+            p_edges  = f"{WEIGHTS_DIR}/p_edges.npy",
+            th_edges = f"{WEIGHTS_DIR}/theta_edges.npy",
+        output:
+            sig_out = f"{OUTPUT_DIR}/{SHORT_NAMES[SIG_DATASET]}_{_split}.parquet",
+            bkg_out = f"{OUTPUT_DIR}/{SHORT_NAMES[BKG_DATASET]}_{_split}.parquet",
+        params:
+            weights_dir   = WEIGHTS_DIR,
+            output_dir    = OUTPUT_DIR,
+            produce_plots = config.get("weights", {}).get("produce_plots", False),
+            container     = CONTAINER,
+        resources:
+            mem_mb  = 8_000,
+            runtime = 30,
+        shell:
+            """
+            {params.container} python ntupelizer/scripts/apply_weights.py \
+                -i {input.sig} \
+                -b {input.bkg} \
+                -w {params.weights_dir} \
+                -o {params.output_dir} \
+                $([ '{params.produce_plots}' = 'True' ] && echo '-p' || true)
+            """
 
 
 # ── stage 4 : validation ──────────────────────────────────────────────────────

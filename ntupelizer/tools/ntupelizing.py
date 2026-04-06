@@ -41,25 +41,11 @@ class EDM4HEPNtupelizer:
             "gen_jet_tau_vis_energy": ak.zeros_like(gen_jets.eta),
             "gen_jet_tau_decaymode": ak.ones_like(gen_jets.eta) * -1,
             "gen_jet_tau_charge": ak.ones_like(gen_jets.eta) * -999,
-            "gen_jet_tau_full_p4": vector.awk(
-                ak.zip(
-                    {
-                        "mass": filler.mass,
-                        "px": filler.x,
-                        "py": filler.y,
-                        "pz": filler.z,
-                    }
-                )
+            "gen_jet_tau_full_p4": ak.zip(
+                {"rho": filler.rho, "phi": filler.phi, "eta": filler.eta, "t": filler.t}
             ),
-            "gen_jet_tau_p4": vector.awk(
-                ak.zip(
-                    {
-                        "mass": filler.mass,
-                        "px": filler.x,
-                        "py": filler.y,
-                        "pz": filler.z,
-                    }
-                )
+            "gen_jet_tau_p4": ak.zip(
+                {"rho": filler.rho, "phi": filler.phi, "eta": filler.eta, "t": filler.t}
             ),
             "gen_jet_DV_x": ak.zeros_like(gen_jets.eta),
             "gen_jet_DV_y": ak.zeros_like(gen_jets.eta),

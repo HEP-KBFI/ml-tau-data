@@ -3,7 +3,6 @@ import glob
 import hydra
 import matplotlib
 import numpy as np
-import general as g
 import mplhep as hep
 import awkward as ak
 import seaborn as sns
@@ -15,6 +14,8 @@ from omegaconf import DictConfig
 from general import load_all_data
 from matplotlib import ticker
 from matplotlib.ticker import AutoLocator
+
+import general as g
 
 hep.style.use(hep.styles.CMS)
 matplotlib.use("Agg")
@@ -53,6 +54,42 @@ def visualize_weights(
     plt.close("all")
 
 
+def visualize_weights_pair(
+    sig_matrix,
+    bkg_matrix,
+    x_bin_edges,
+    y_bin_edges,
+    output_path,
+    sig_title="Signal",
+    bkg_title="Background",
+    ylabel=r"$\theta$",
+    xlabel=r"$p$",
+):
+    x_labels = [f"{label:9.0f}" for label in (x_bin_edges[1:] + x_bin_edges[:-1]) / 2]
+    y_labels = [f"{label:9.2f}" for label in (y_bin_edges[1:] + y_bin_edges[:-1]) / 2]
+    mpl.rcParams.update(mpl.rcParamsDefault)
+    hep.style.use(hep.styles.CMS)
+    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(24, 9))
+    for ax, matrix, title in zip(
+        axes, [sig_matrix, bkg_matrix], [sig_title, bkg_title]
+    ):
+        plt.sca(ax)
+        heatmap = sns.heatmap(matrix, ax=ax)
+        heatmap.set_xticks(range(len(x_labels)))
+        heatmap.set_xticklabels(x_labels)
+        heatmap.set_yticks(range(len(y_labels)))
+        heatmap.set_yticklabels(y_labels)
+        ax.set_ylabel(ylabel)
+        ax.set_xlabel(xlabel)
+        ax.set_title(title)
+        plt.yticks(rotation=0)
+        heatmap.yaxis.set_major_locator(AutoLocator())
+        heatmap.xaxis.set_major_locator(AutoLocator())
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close("all")
+
+
 def create_matrix(data, y_bin_edges, x_bin_edges, y_property, x_property):
     p4s = g.reinitialize_p4(data.gen_jet_p4)
     x_property_ = getattr(p4s, x_property).to_numpy()
@@ -71,62 +108,25 @@ def get_weight_matrix(target_matrix, comp_matrix):
     return np.nan_to_num(weights, nan=0.0)
 
 
-def process_files(
-    weight_matrix,
-    theta_bin_edges,
-    pt_bin_edges,
-    data_dir,
-    cfg,
-    use_multiprocessing=True,
-):
-    data_paths = glob.glob(os.path.join(data_dir, "*.parquet"))
-    if use_multiprocessing:
-        pool = multiprocessing.Pool(processes=8)
-        weights = []
-        for result in pool.starmap(
-            process_single_file,
-            zip(
-                data_paths,
-                repeat(weight_matrix),
-                repeat(theta_bin_edges),
-                repeat(pt_bin_edges),
-                repeat(cfg),
-            ),
-        ):
-            weights.extend(result)
-    else:
-        for input_path in data_paths:
-            weights.extend(
-                process_single_file(
-                    input_path=input_path,
-                    weight_matrix=weight_matrix,
-                    theta_bin_edges=theta_bin_edges,
-                    pt_bin_edges=pt_bin_edges,
-                    cfg=cfg,
-                )
-            )
-    return weights
-
-
-def get_weights(data, weight_matrix, theta_bin_edges, pt_bin_edges):
+def get_weights(data, weight_matrix, theta_bin_edges, p_bin_edges):
     p4s = g.reinitialize_p4(data.gen_jet_p4)
     theta_values = np.rad2deg(p4s.theta.to_numpy())
-    pt_values = p4s.p.to_numpy()
+    p_values = p4s.p.to_numpy()
     theta_bin = (
         np.digitize(theta_values, bins=(theta_bin_edges[1:] + theta_bin_edges[:-1]) / 2)
         - 1
     )
-    pt_bin = np.digitize(pt_values, bins=(pt_bin_edges[1:] + pt_bin_edges[:-1]) / 2) - 1
+    p_bin = np.digitize(p_values, bins=(p_bin_edges[1:] + p_bin_edges[:-1]) / 2) - 1
     matrix_loc = np.concatenate(
-        [theta_bin.reshape(-1, 1), pt_bin.reshape(-1, 1)], axis=1
+        [theta_bin.reshape(-1, 1), p_bin.reshape(-1, 1)], axis=1
     )
     weights = ak.from_iter([weight_matrix[tuple(loc)] for loc in matrix_loc])
     return weights
 
 
-def process_single_file(input_path, weight_matrix, theta_bin_edges, pt_bin_edges, cfg):
+def process_single_file(input_path, weight_matrix, theta_bin_edges, p_bin_edges, cfg):
     data = ak.from_parquet(input_path)
-    weights = get_weights(data, weight_matrix, theta_bin_edges, pt_bin_edges)
+    weights = get_weights(data, weight_matrix, theta_bin_edges, p_bin_edges)
     if cfg.add_weights:
         merged_info = {field: data[field] for field in data.fields}
         merged_info.update({"weight": weights})
@@ -234,165 +234,6 @@ def plot_distributions(
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight")
     plt.close("all")
-
-
-@hydra.main(config_path="../config", config_name="weighting", version_base=None)
-def main(cfg: DictConfig):
-    sig_data, bkg_data = load_samples(
-        sig_dir=cfg.samples.ZH_Htautau.output_dir,
-        bkg_dir=cfg.samples.QCD.output_dir,
-        n_files=cfg.n_files_per_sample,
-        branches=["gen_jet_p4", "gen_jet_tau_decaymode"],
-    )
-    output_dir = os.path.abspath(os.path.join(cfg.samples.QCD.output_dir, os.pardir))
-    eta_bin_edges = np.linspace(
-        cfg.weighting.variables.eta.range[0],
-        cfg.weighting.variables.eta.range[1],
-        cfg.weighting.variables.eta.n_bins,
-    )
-    theta_bin_edges = np.linspace(
-        cfg.weighting.variables.theta.range[0],
-        cfg.weighting.variables.theta.range[1],
-        cfg.weighting.variables.theta.n_bins,
-    )
-    pt_bin_edges = np.linspace(
-        cfg.weighting.variables.pt.range[0],
-        cfg.weighting.variables.pt.range[1],
-        cfg.weighting.variables.pt.n_bins,
-    )
-    sig_matrix = create_matrix(
-        sig_data, eta_bin_edges, pt_bin_edges, y_property="eta", x_property="pt"
-    )
-    bkg_matrix = create_matrix(
-        bkg_data, eta_bin_edges, pt_bin_edges, y_property="eta", x_property="pt"
-    )
-    if cfg.produce_plots:
-        sig_output_path = os.path.join(output_dir, "signal_matrix.pdf")
-        visualize_weights(sig_matrix, pt_bin_edges, eta_bin_edges, sig_output_path)
-        bkg_output_path = os.path.join(output_dir, "bkg_matrix.pdf")
-        visualize_weights(bkg_matrix, pt_bin_edges, eta_bin_edges, bkg_output_path)
-        total_output_path = os.path.join(output_dir, "total_matrix.pdf")
-        visualize_weights(
-            sig_matrix + bkg_matrix, pt_bin_edges, eta_bin_edges, total_output_path
-        )
-        normed_total_output_path = os.path.join(output_dir, "normed_total_matrix.pdf")
-        visualize_weights(
-            (sig_matrix + bkg_matrix) / (np.sum(sig_matrix) + np.sum(bkg_matrix)),
-            pt_bin_edges,
-            eta_bin_edges,
-            normed_total_output_path,
-        )
-    sig_weights = get_weight_matrix(target_matrix=sig_matrix, comp_matrix=bkg_matrix)
-    bkg_weights = get_weight_matrix(target_matrix=bkg_matrix, comp_matrix=sig_matrix)
-    if cfg.produce_plots:
-        sig_output_path = os.path.join(output_dir, "signal_weights.pdf")
-        visualize_weights(sig_weights, pt_bin_edges, eta_bin_edges, sig_output_path)
-        bkg_output_path = os.path.join(output_dir, "bkg_weights.pdf")
-        visualize_weights(bkg_weights, pt_bin_edges, eta_bin_edges, bkg_output_path)
-
-    sig_matrix_p_theta = create_matrix(
-        sig_data, theta_bin_edges, pt_bin_edges, y_property="theta", x_property="p"
-    )
-    bkg_matrix_p_theta = create_matrix(
-        bkg_data, theta_bin_edges, pt_bin_edges, y_property="theta", x_property="p"
-    )
-    if cfg.produce_plots:
-        print("Visualizing distributions")
-        sig_output_path_p_theta = os.path.join(output_dir, "signal_matrix_p_theta.pdf")
-        visualize_weights(
-            sig_matrix_p_theta,
-            pt_bin_edges,
-            theta_bin_edges,
-            sig_output_path_p_theta,
-            ylabel=r"$\theta$",
-            xlabel="p",
-        )
-        bkg_output_path_p_theta = os.path.join(output_dir, "bkg_matrix_p_theta.pdf")
-        visualize_weights(
-            bkg_matrix_p_theta,
-            pt_bin_edges,
-            theta_bin_edges,
-            bkg_output_path_p_theta,
-            ylabel=r"$\theta$",
-            xlabel="p",
-        )
-        total_output_path_p_theta = os.path.join(output_dir, "total_matrix_p_theta.pdf")
-        visualize_weights(
-            sig_matrix_p_theta + bkg_matrix_p_theta,
-            pt_bin_edges,
-            theta_bin_edges,
-            total_output_path_p_theta,
-            ylabel=r"$\theta$",
-            xlabel="p",
-        )
-        normed_total_output_path_p_theta = os.path.join(
-            output_dir, "normed_total_matrix_p_theta.pdf"
-        )
-        visualize_weights(
-            (sig_matrix_p_theta + bkg_matrix_p_theta)
-            / (np.sum(sig_matrix_p_theta) + np.sum(bkg_matrix_p_theta)),
-            pt_bin_edges,
-            theta_bin_edges,
-            normed_total_output_path_p_theta,
-            ylabel=r"$\theta$",
-            xlabel="p",
-        )
-    sig_weights_p_theta = get_weight_matrix(
-        target_matrix=sig_matrix_p_theta, comp_matrix=bkg_matrix_p_theta
-    )
-    bkg_weights_p_theta = get_weight_matrix(
-        target_matrix=bkg_matrix_p_theta, comp_matrix=sig_matrix_p_theta
-    )
-    signal_weights = process_files(
-        weight_matrix=sig_weights_p_theta,
-        theta_bin_edges=theta_bin_edges,
-        pt_bin_edges=pt_bin_edges,
-        data_dir=cfg.samples.ZH_Htautau.output_dir,
-        cfg=cfg,
-        use_multiprocessing=cfg.use_multiprocessing,
-    )
-    bkg_weights = process_files(
-        weight_matrix=bkg_weights_p_theta,
-        theta_bin_edges=theta_bin_edges,
-        pt_bin_edges=pt_bin_edges,
-        data_dir=cfg.samples.QCD.output_dir,
-        cfg=cfg,
-        use_multiprocessing=cfg.use_multiprocessing,
-    )
-    plot_weight_distributions(signal_weights, bkg_weights, output_dir)
-    if cfg.produce_plots:
-        print("Visualizing weights and plotting the weighting results")
-        sig_output_path_p_theta = os.path.join(output_dir, "signal_weights_p_theta.pdf")
-        visualize_weights(
-            weight_matrix=sig_weights_p_theta,
-            x_bin_edges=pt_bin_edges,
-            y_bin_edges=theta_bin_edges,
-            output_path=sig_output_path_p_theta,
-            ylabel=r"$\theta$",
-            xlabel="p",
-        )
-        bkg_output_path_p_theta = os.path.join(output_dir, "bkg_weights_p_theta.pdf")
-        visualize_weights(
-            weight_matrix=bkg_weights_p_theta,
-            x_bin_edges=pt_bin_edges,
-            y_bin_edges=theta_bin_edges,
-            output_path=bkg_output_path_p_theta,
-            ylabel=r"$\theta$",
-            xlabel="p",
-        )
-        sig_weights = get_weights(
-            sig_data, sig_weights_p_theta, theta_bin_edges, pt_bin_edges
-        )
-        bkg_weights = get_weights(
-            bkg_data, bkg_weights_p_theta, theta_bin_edges, pt_bin_edges
-        )
-        plot_weighting_results(
-            sig_data,
-            bkg_data,
-            sig_weights=sig_weights,
-            bkg_weights=bkg_weights,
-            output_dir=output_dir,
-        )
 
 
 def plot_weight_distributions(signal_weights, bkg_weights, output_dir):
