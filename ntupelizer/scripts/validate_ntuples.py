@@ -84,46 +84,63 @@ if __name__ == "__main__":
             xlabel=xlabel,
         )
 
-    # ── data integrity plots (per-dataset) ────────────────────────────────────
-    for label, data in [("signal", sig_data), ("background", bkg_data)]:
-        di.plot_num_particles_per_jet(data, label=label).figure.savefig(
-            os.path.join(output_dir, f"{label}_num_particles_per_jet.pdf"),
-            bbox_inches="tight",
-        )
-
-        di.plot_jet_pt(data, label=label).figure.savefig(
-            os.path.join(output_dir, f"{label}_reco_jet_pt.pdf"),
-            bbox_inches="tight",
-        )
-
-        if label == "signal":
-            di.plot_decay_mode_distribution(
-                data, title=f"{label.capitalize()} decay modes"
-            ).figure.savefig(
-                os.path.join(output_dir, f"{label}_decay_modes.pdf"),
-                bbox_inches="tight",
-            )
-
-        if "gen_jet_tau_vis_energy" in data.fields:
-            di.plot_reco_jet_energy(data, label=label).figure.savefig(
-                os.path.join(output_dir, f"{label}_reco_jet_energy.pdf"),
-                bbox_inches="tight",
-            )
-
-        if "reco_cand_matched_gen_energy" in data.fields:
-            di.plot_reco_vs_gen_cand_energy(data, label=label).figure.savefig(
-                os.path.join(output_dir, f"{label}_reco_cand_energy.pdf"),
-                bbox_inches="tight",
-            )
-
-        for var in ["reco_cand_dxy", "reco_cand_dz", "reco_cand_d3"]:
-            if var in data.fields:
-                di.plot_lifetime_variable(data, var, label=label).figure.savefig(
-                    os.path.join(output_dir, f"{label}_{var}.pdf"),
-                    bbox_inches="tight",
-                )
-
+    # ── data integrity plots (signal and background overlaid) ─────────────────
     import matplotlib.pyplot as plt
+
+    def save_overlay(plot_fn, output_name, **kwargs):
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        plot_fn(sig_data, label="Signal", ax=ax, color="red", **kwargs)
+        plot_fn(bkg_data, label="Background", ax=ax, color="blue", **kwargs)
+        plt.tight_layout()
+        fig.savefig(os.path.join(output_dir, output_name), bbox_inches="tight")
+        plt.close(fig)
+
+    save_overlay(di.plot_num_particles_per_jet, "num_particles_per_jet.pdf")
+    save_overlay(di.plot_jet_pt, "reco_jet_pt.pdf")
+
+    if "gen_jet_tau_vis_energy" in sig_data.fields:
+        save_overlay(di.plot_reco_jet_energy, "reco_jet_energy.pdf")
+
+    if "reco_cand_matched_gen_energy" in sig_data.fields:
+        save_overlay(di.plot_reco_vs_gen_cand_energy, "reco_cand_energy.pdf")
+
+    _lifetime_bins = {
+        "reco_cand_dxy": np.logspace(-3, 1, 80),   # 1 µm – 10 mm
+        "reco_cand_dz":  np.logspace(-3, 1, 80),   # 1 µm – 10 mm
+        "reco_cand_d3":  np.logspace(-3, 2, 80),   # 1 µm – 100 mm (K0s/Lambda tail)
+    }
+    for var in ["reco_cand_dxy", "reco_cand_dz", "reco_cand_d3"]:
+        if var in sig_data.fields:
+            log_bins = _lifetime_bins[var]
+            fig, ax = plt.subplots(figsize=(7, 5.5))
+            di.plot_lifetime_variable(
+                sig_data,
+                label="Signal",
+                ax=ax,
+                color="red",
+                variable=var,
+                bins=log_bins,
+            )
+            di.plot_lifetime_variable(
+                bkg_data,
+                label="Background",
+                ax=ax,
+                color="blue",
+                variable=var,
+                bins=log_bins,
+            )
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+            plt.tight_layout()
+            fig.savefig(os.path.join(output_dir, f"{var}.pdf"), bbox_inches="tight")
+            plt.close(fig)
+
+    if "gen_jet_tau_decaymode" in sig_data.fields:
+        di.plot_decay_mode_distribution(
+            sig_data, title="Signal decay modes"
+        ).figure.savefig(
+            os.path.join(output_dir, "signal_decay_modes.pdf"), bbox_inches="tight"
+        )
 
     plt.close("all")
 

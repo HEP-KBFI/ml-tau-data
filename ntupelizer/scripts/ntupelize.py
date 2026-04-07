@@ -2,7 +2,7 @@ import os
 import time
 import hydra
 from omegaconf import DictConfig
-from ntupelizer.tools import ntupelizer as nt
+from ntupelizer.tools import ntupelizing as nt
 
 import os
 

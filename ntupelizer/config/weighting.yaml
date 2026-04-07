@@ -1,8 +1,8 @@
 weighting:
   variables:
-    pt:
-      range: [20, 200]
-      n_bins: 45
+    p:
+      range: [2, 55]
+      n_bins: 53
     eta:
       range: [-2.8, 2.8]
       n_bins: 27

@@ -1,8 +1,8 @@
-output_dir: /home/laurits/Ntuple_results
+output_dir: /home/laurits/0407_ntuples
 temp_dir: /home/laurits/tmp/ntupelized_tmp  # per-file parquets; deleted automatically after merge_and_split
 datasets:
   p8_ee_Z_tautau_ecm91:
-    input_dir: "/local/joosep/mlpf/cld/v1.2.5_key4hep_2025-05-29/gen/p8_ee_Z_tautau_ecm91/root/"
+    input_dir: "/local/joosep/mlpf/cld/v1.2.5_key4hep_2025-05-29/gen/p8_ee_Z_qq_ecm91/root/"
     file_pattern: "*.root"
     short_name: z
     is_signal: true

@@ -37,10 +37,21 @@ def load_sample(path):
         "gen_jet_tau_decaymode",  # tau decay mode
         "gen_jet_tau_charge",
     ]
+    p4_fields = ["rho", "phi", "eta", "t"]
     data = []
     for fi in tqdm.tqdm(list(glob.glob(path + "/*.parquet"))):
         ret = ak.from_parquet(fi, columns=columns)
-        ret = ak.Array({k: ret[k] for k in columns})
+        # Normalize gen_jet_tau_p4 to the common 4-field schema {rho, phi, eta, t}.
+        # Some files have extra fields (x, y, z, tau), which causes ak.concatenate
+        # to produce a dense_union type that pyarrow cannot write to parquet.
+        ret = ak.Array(
+            {
+                **{k: ret[k] for k in columns if k != "gen_jet_tau_p4"},
+                "gen_jet_tau_p4": ak.zip(
+                    {f: ret["gen_jet_tau_p4"][f] for f in p4_fields}
+                ),
+            }
+        )
         data.append(ret)
     data = ak.concatenate(data)
     print("Fields before merge: ", data.fields)

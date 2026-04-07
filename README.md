@@ -40,3 +40,15 @@ pip install "snakemake>=7,<8" "pulp>=2.7,<3"
 When running from the repo root, `sitecustomize.py` also adds a small
 compatibility shim for older PuLP releases that expose `listSolvers()`
 instead of `list_solvers()`.
+
+In order to run the workflow using SLURM for the ntupelization stage:
+
+```bash
+snakemake snakemake --profile ntupelizer/config/slurm
+```
+
+For running locally, run:
+```bash
+snakemake -j12
+```
+where the number 12 ndicates the number of threads to use.
