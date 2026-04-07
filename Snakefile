@@ -148,8 +148,9 @@ rule ntupelize:
     resources:
         # These values are passed to the SLURM profile (profiles/slurm/config.yaml)
         # via {resources.mem_mb} and {resources.runtime} in the sbatch template.
-        mem_mb  = 8_000,
-        runtime = 120,   # minutes
+        mem_mb  = 2_000,
+        cpus    = 1,
+        runtime = 20,   # minutes; 15 files × ~1 min each
     shell:
         # ntupelize.py takes single input/output paths directly as Hydra overrides.
         # {input}, {output}, {params.*} are substituted by Snakemake before
@@ -190,7 +191,7 @@ for _ds, _cfg in DATASETS.items():
             train_frac = _cfg.get("train_frac", 0.8),
             container  = CONTAINER,
         resources:
-            mem_mb  = 16_000,
+            mem_mb  = 32_000,
             runtime = 60,
         shell:
             """
@@ -222,7 +223,7 @@ rule compute_weights:
         n_files        = config.get("weights", {}).get("n_files_per_sample", -1),
         container      = CONTAINER,
     resources:
-        mem_mb  = 8_000,
+        mem_mb  = 32_000,
         runtime = 30,
     shell:
         """
@@ -259,7 +260,7 @@ for _split in SPLITS:
             produce_plots = config.get("weights", {}).get("produce_plots", False),
             container     = CONTAINER,
         resources:
-            mem_mb  = 8_000,
+            mem_mb  = 32_000,
             runtime = 30,
         shell:
             """
@@ -285,7 +286,7 @@ rule validation:
         bkg_file  = f"{OUTPUT_DIR}/{SHORT_NAMES[BKG_DATASET]}_train.parquet",
         container = CONTAINER,
     resources:
-        mem_mb  = 8_000,
+        mem_mb  = 32_000,
         runtime = 60,
     shell:
         """

@@ -551,10 +551,10 @@ def find_event_track_pcas(
     cov_matrix = ak.to_numpy(
         event[f"{track_states_collection}.covMatrix.values[21]"][valid_si_idx]
     )
-    d0_error = cov_matrix[:, 0]
-    phi0_error = cov_matrix[:, 2]
-    z0_error = cov_matrix[:, 9]
-    tanL_error = cov_matrix[:, 14]
+    d0_error = np.sqrt(np.abs(cov_matrix[:, 0]))
+    phi0_error = np.sqrt(np.abs(cov_matrix[:, 2]))
+    z0_error = np.sqrt(np.abs(cov_matrix[:, 9]))
+    tanL_error = np.sqrt(np.abs(cov_matrix[:, 14]))
 
     # =========================================================================
     # Calculate track origins (vectorized)
@@ -985,10 +985,10 @@ def find_all_track_pcas(
     zr = ak.to_numpy(track_states_zr[global_ts_idx])
     cov_matrix = ak.to_numpy(track_states_cov[global_ts_idx])
 
-    d0_error = cov_matrix[:, 0]
-    phi0_error = cov_matrix[:, 2]
-    z0_error = cov_matrix[:, 9]
-    tanL_error = cov_matrix[:, 14]
+    d0_error = np.sqrt(np.abs(cov_matrix[:, 0]))
+    phi0_error = np.sqrt(np.abs(cov_matrix[:, 2]))
+    z0_error = np.sqrt(np.abs(cov_matrix[:, 9]))
+    tanL_error = np.sqrt(np.abs(cov_matrix[:, 14]))
 
     # Get vertex coordinates for valid particles
     vtx_x = ak.to_numpy(vertex_x[valid_indices])

@@ -22,6 +22,7 @@ import os
 import sys
 import numpy as np
 import awkward as ak
+import matplotlib.pyplot as plt
 from pathlib import Path
 from docopt import docopt
 
@@ -38,7 +39,7 @@ def apply_and_save(input_path, weight_matrix, theta_edges, pt_edges, output_dir)
     )
     ak.to_parquet(out, output_path, row_group_size=1024)
     print(f"Wrote {len(data)} events with weights → {output_path}")
-    return weights
+    return weights, data
 
 
 if __name__ == "__main__":
@@ -59,10 +60,10 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
 
     # ── apply weights and save ────────────────────────────────────────────────
-    sig_weights = apply_and_save(
+    sig_weights, sig_data = apply_and_save(
         sig_path, sig_weight_matrix, theta_edges, pt_edges, output_dir
     )
-    bkg_weights = apply_and_save(
+    bkg_weights, bkg_data = apply_and_save(
         bkg_path, bkg_weight_matrix, theta_edges, pt_edges, output_dir
     )
 
@@ -72,3 +73,31 @@ if __name__ == "__main__":
         os.makedirs(validation_dir, exist_ok=True)
         wt.plot_weight_distributions(sig_weights, bkg_weights, validation_dir)
         print("Saved weight distribution plot.")
+
+        # ── dxy / dz error overlay plots ──────────────────────────────────────
+        INVALID = -1000.0
+        error_vars = {
+            "reco_cand_dxy_error": "PFCandidate dxy error [mm]",
+            "reco_cand_dz_error": "PFCandidate dz error [mm]",
+        }
+        log_bins = np.logspace(-4, 0, 80)
+        for var, xlabel in error_vars.items():
+            if var not in sig_data.fields:
+                continue
+            fig, ax = plt.subplots(figsize=(7, 5.5))
+            for data, label, color in [
+                (sig_data, "Signal", "red"),
+                (bkg_data, "Background", "blue"),
+            ]:
+                flat = ak.to_numpy(ak.flatten(data[var]))
+                flat = flat[flat > INVALID + 1]
+                counts, edges = np.histogram(flat, bins=log_bins, density=True)
+                ax.step(edges[:-1], counts, where="post", label=label, color=color)
+            ax.set_xscale("log")
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel("Fraction [a.u.]")
+            ax.legend()
+            plt.tight_layout()
+            fig.savefig(os.path.join(validation_dir, f"{var}.pdf"), bbox_inches="tight")
+            plt.close(fig)
+        print("Saved dxy/dz error plots.")

@@ -117,6 +117,10 @@ def get_weights(data, weight_matrix, theta_bin_edges, p_bin_edges):
         - 1
     )
     p_bin = np.digitize(p_values, bins=(p_bin_edges[1:] + p_bin_edges[:-1]) / 2) - 1
+    n_theta = weight_matrix.shape[0]
+    n_p = weight_matrix.shape[1]
+    theta_bin = np.clip(theta_bin, 0, n_theta - 1)
+    p_bin = np.clip(p_bin, 0, n_p - 1)
     matrix_loc = np.concatenate(
         [theta_bin.reshape(-1, 1), p_bin.reshape(-1, 1)], axis=1
     )
