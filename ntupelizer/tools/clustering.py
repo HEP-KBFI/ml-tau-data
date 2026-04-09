@@ -10,7 +10,7 @@ class JetClusterer:
         self,
         particles: ak.Array,
         particles_p4: ak.Array,
-        min_pt: float = 5.0,
+        min_pt: float = 0.0,
         deltar: float = 0.4,
     ):
         self.min_pt = min_pt
@@ -48,7 +48,7 @@ class RecoJetClusterer(JetClusterer):
         self,
         particles: ak.Array,
         particles_p4: ak.Array,
-        min_pt: float = 5.0,
+        min_pt: float = 0.0,
         deltar: float = 0.4,
     ):
         super().__init__(
@@ -65,7 +65,7 @@ class GenJetClusterer(JetClusterer):
         self,
         particles: ak.Array,
         particles_p4: ak.Array,
-        min_pt: float = 5.0,
+        min_pt: float = 0.0,
         deltar: float = 0.4,
     ):
         super().__init__(

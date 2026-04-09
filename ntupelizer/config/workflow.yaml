@@ -1,4 +1,4 @@
-output_dir: /home/laurits/0407_lifetime_ntuples
+output_dir: /home/laurits/0409_lifetime_ntuples_pt0
 temp_dir: /home/laurits/tmp/ntupelized_tmp  # per-file parquets; deleted automatically after merge_and_split
 datasets:
   p8_ee_Z_tautau_ecm91:
