@@ -101,12 +101,13 @@ def ntupelized_files_for(dataset):
 # Rules listed here always run on the local machine even when --profile slurm
 # is active. ntupelize (one job per ROOT file) is the only rule submitted to
 # SLURM — everything else is fast enough to run locally.
-localrules: all, compute_weights, validation
+localrules: all, compute_weights, validation, preprocess_torch
 
 
 rule all:
     input:
         [f"{OUTPUT_DIR}/{SHORT_NAMES[ds]}_{split}.parquet" for ds in DATASETS for split in SPLITS],
+        [f"{OUTPUT_DIR}/{SHORT_NAMES[ds]}_{split}.pt" for ds in DATASETS for split in SPLITS],
         f"{OUTPUT_DIR}/validation/.done",
         f"{WEIGHTS_DIR}/sig_weights.npy",
 
@@ -295,4 +296,28 @@ rule validation:
             -s {params.sig_file} \
             -b {params.bkg_file} \
             -o {params.outdir}
+        """
+
+
+# ── stage 5 : preprocess to .pt tensors ──────────────────────────────────────
+# One-time conversion of the final weighted .parquet files into pre-built
+# PyTorch tensor files (.pt) so the training dataloader can skip the
+# parquet→tensor conversion on every run.
+rule preprocess_torch:
+    input:
+        [f"{OUTPUT_DIR}/{SHORT_NAMES[ds]}_{split}.parquet" for ds in DATASETS for split in SPLITS]
+    output:
+        [f"{OUTPUT_DIR}/{SHORT_NAMES[ds]}_{split}.pt" for ds in DATASETS for split in SPLITS]
+    params:
+        input_dir  = OUTPUT_DIR,
+        max_cands  = config.get("max_cands", 20),
+        container  = CONTAINER,
+    resources:
+        mem_mb  = 32_000,
+        runtime = 120,
+    shell:
+        """
+        {params.container} python ntupelizer/scripts/preprocess_torch.py \
+            -i {params.input_dir} \
+            --max-cands {params.max_cands}
         """
