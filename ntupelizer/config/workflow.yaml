@@ -1,4 +1,4 @@
-output_dir: /home/laurits/0422_high_pt_samples
+output_dir: /home/laurits/0430_New_split_new_kin_target
 temp_dir: /home/laurits/tmp/ntupelized_tmp  # per-file parquets; deleted automatically after merge_and_split
 datasets:
   p8_ee_Z_tautau_ecm91:
