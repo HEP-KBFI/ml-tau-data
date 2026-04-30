@@ -20,7 +20,6 @@ from ntupelizer.tools import general as g
 from ntupelizer.tools import features as f
 from ntupelizer.tools.tau_decaymode import get_reduced_decaymodes
 
-
 # Reduced decay mode → class index (0-5) for 6-class one-hot encoding
 _DM_TO_CLASS = {0: 0, 1: 1, 2: 2, 10: 3, 11: 4, 15: 5, 16: 5}
 
@@ -52,8 +51,8 @@ def build_tensors_from_data(data: ak.Array, max_cands: int) -> tuple:
     eps = 1e-6
     cand_features = ak.Array(
         {
-            "cand_deta": f.deltaEta(jet_constituent_p4s.eta, jet_p4s.eta),
-            "cand_dphi": f.deltaPhi(jet_constituent_p4s.phi, jet_p4s.phi),
+            "cand_deta": f.signedDeltaEta(jet_constituent_p4s.eta, jet_p4s.eta),
+            "cand_dphi": f.signedDeltaPhi(jet_constituent_p4s.phi, jet_p4s.phi),
             "cand_logpt": np.log(np.maximum(jet_constituent_p4s.pt, eps)),
             "cand_loge": np.log(np.maximum(jet_constituent_p4s.energy, eps)),
             "cand_logptrel": np.log(
@@ -127,8 +126,10 @@ def build_tensors_from_data(data: ak.Array, max_cands: int) -> tuple:
     _energy_reco = ak.to_numpy(jet_p4s.energy).astype(np.float32)
 
     _deta = _eta_gen - _eta_reco
-    _dphi_raw = _phi_gen - _phi_reco
-    _dphi = np.arctan2(np.sin(_dphi_raw), np.cos(_dphi_raw))
+
+    _dsinphi = np.sin(_phi_gen) - np.sin(_phi_reco)
+    _dcosphi = np.cos(_phi_gen) - np.cos(_phi_reco)
+
     _vis_pt_ratio = np.maximum(_pt_gen / np.maximum(_pt_reco, eps), eps)
     _mass_gen = np.sqrt(
         np.maximum(_energy_gen**2 - (_pt_gen * np.cosh(_eta_gen)) ** 2, 0.0)
@@ -142,8 +143,8 @@ def build_tensors_from_data(data: ak.Array, max_cands: int) -> tuple:
             [
                 np.log(_vis_pt_ratio),
                 _deta,
-                np.sin(_dphi),
-                np.cos(_dphi),
+                _dsinphi,
+                _dcosphi,
                 np.log(_vis_m_ratio),
             ],
             axis=-1,

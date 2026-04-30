@@ -1,4 +1,4 @@
-output_dir: /home/laurits/0412_increased_stats
+output_dir: /home/laurits/0422_high_pt_samples
 temp_dir: /home/laurits/tmp/ntupelized_tmp  # per-file parquets; deleted automatically after merge_and_split
 datasets:
   p8_ee_Z_tautau_ecm91:
@@ -6,14 +6,14 @@ datasets:
     file_pattern: "*.root"
     short_name: z
     is_signal: true
-    train_frac: 0.70
+    train_frac: 0.9
 
   p8_ee_Z_qq_ecm91:
     input_dir: "/local/joosep/mlpf/cld/v1.2.5_key4hep_2025-05-29/gen/p8_ee_Z_qq_ecm91/root/"
     file_pattern: "*.root"
     short_name: qq
     is_signal: false
-    train_frac: 0.70
+    train_frac: 0.9
 weights:
   produce_plots: True
   add_weights: True
