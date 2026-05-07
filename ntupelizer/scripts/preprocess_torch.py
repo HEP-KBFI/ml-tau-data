@@ -78,9 +78,9 @@ def build_tensors_from_data(data: ak.Array, max_cands: int) -> tuple:
                 abs(data.reco_cand_pdgs) == 130, np.float32
             ),
             "cand_dz": data.reco_cand_dz,
-            "cand_dz_error": data.reco_cand_dz_error,
+            "cand_dz_error": data.reco_cand_dz / data.reco_cand_dz_error,
             "cand_dxy": data.reco_cand_dxy,
-            "cand_dxy_error": data.reco_cand_dxy_error,
+            "cand_dxy_error": data.reco_cand_dxy / data.reco_cand_dxy_error,
         }
     )
 
