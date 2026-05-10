@@ -127,8 +127,11 @@ def build_tensors_from_data(data: ak.Array, max_cands: int) -> tuple:
 
     _deta = _eta_gen - _eta_reco
 
-    _dsinphi = np.sin(_phi_gen) - np.sin(_phi_reco)
-    _dcosphi = np.cos(_phi_gen) - np.cos(_phi_reco)
+    # _dsinphi = np.sin(_phi_gen) - np.sin(_phi_reco)
+    # _dcosphi = np.cos(_phi_gen) - np.cos(_phi_reco)
+
+    _sin_dphi = np.sin(_phi_gen - _phi_reco)
+    _cos_dphi = np.cos(_phi_gen - _phi_reco)
 
     _vis_pt_ratio = np.maximum(_pt_gen / np.maximum(_pt_reco, eps), eps)
     _mass_gen = np.sqrt(
@@ -143,8 +146,10 @@ def build_tensors_from_data(data: ak.Array, max_cands: int) -> tuple:
             [
                 np.log(_vis_pt_ratio),
                 _deta,
-                _dsinphi,
-                _dcosphi,
+                # _dsinphi,
+                # _dcosphi,
+                _sin_dphi,
+                _cos_dphi,
                 np.log(_vis_m_ratio),
             ],
             axis=-1,

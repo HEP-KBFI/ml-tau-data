@@ -1,4 +1,4 @@
-output_dir: /home/laurits/0506_lifetime_significance
+output_dir: /home/laurits/0509_dsinphi_to_sindphi
 temp_dir: /home/laurits/tmp/ntupelized_tmp  # per-file parquets; deleted automatically after merge_and_split
 datasets:
   p8_ee_Z_tautau_ecm91:
