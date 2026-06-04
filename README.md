@@ -2,6 +2,12 @@
 
 Data processing pipeline for the machine-learned hadronically-decaying tau lepton reconstruction and identification project. Takes EDM4HEP/PodioROOT simulation files and produces flat Parquet ntuples ready for ML training.
 
+## Setup
+```
+https://github.com/HEP-KBFI/ml-tau-data
+git submodule update --init --recursive
+```
+
 ## Overview
 
 The workflow is managed by **Snakemake** and consists of four stages:
@@ -24,6 +30,8 @@ Final outputs land in `output_dir` (configured in `ntupelizer/config/workflow.ya
 ```
 
 Intermediate per-file Parquets are written to `temp_dir` and deleted automatically after merging.
+
+Note: Input simulation files can be generated using the scripts in the `sim/` directory (see [Simulation](#simulation) below).
 
 ## Setup
 
@@ -114,8 +122,37 @@ ntupelizer/
     tau_decaymode.py               # decay mode classification
     weight_tools.py                # (p, theta) reweighting utilities
     general.py                     # shared helpers and DUMMY_P4_VECTOR
-sim/                               # standalone CLD simulation scripts
+sim/                               # Generation and simulation scripts
+  cld/                             # CLD detector simulation (FCC-ee)
+    CLDConfig/                     # Submodule for CLD configuration
+    run_sim.sh                     # SLURM script for CLD gen-sim-reco
+  clic/                            # CLIC detector simulation
+    CLICPerformance/               # Submodule for CLIC configuration
+    run_sim.sh                     # SLURM script for CLIC gen-sim-reco
 ```
+
+## Simulation
+
+Standalone scripts for generating EDM4HEP/PodioROOT files using **Key4hep** are provided in the `sim/` directory. These scripts handle the full generation-simulation-reconstruction chain:
+1. **Generation** — Pythia8 events
+2. **Simulation** — Geant4 via `ddsim`
+3. **Reconstruction** — Detector-specific reconstruction (Gaudi-based)
+
+The simulation scripts are designed to run as SLURM jobs and require access to `/cvmfs/sw.hsf.org`.
+
+### CLD Simulation (FCC-ee)
+```bash
+cd sim/cld
+sbatch run_sim.sh <sample_name> <seed>
+```
+Sample names (e.g., `p8_ee_Z_tautau_ecm91`) correspond to Pythia cards in `sim/cld/CLDConfig/pythia/`.
+
+### CLIC Simulation
+```bash
+cd sim/clic
+sbatch run_sim.sh <sample_name> <seed>
+```
+Sample names (e.g., `p8_ee_qq_ecm380`) correspond to Pythia cards in `sim/clic/pythia/`.
 
 ## Container
 
