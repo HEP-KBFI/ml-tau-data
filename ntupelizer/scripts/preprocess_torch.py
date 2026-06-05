@@ -12,6 +12,9 @@ The output .pt files live alongside the parquet files with the same stem.
 import os
 import glob
 import argparse
+import multiprocessing as mp
+import time
+from tqdm import tqdm
 import torch
 import numpy as np
 import awkward as ak
@@ -204,6 +207,36 @@ def build_tensors_from_data(data: ak.Array, max_cands: int) -> tuple:
     )
 
 
+def _to_numpy(item):
+    """Recursively convert tensors to numpy arrays for safe inter-process pickling."""
+    if isinstance(item, torch.Tensor):
+        return item.numpy()
+    if isinstance(item, dict):
+        return {k: _to_numpy(v) for k, v in item.items()}
+    if isinstance(item, tuple):
+        return tuple(_to_numpy(v) for v in item)
+    return item
+
+
+def _to_tensor(item):
+    """Recursively convert numpy arrays back to tensors."""
+    if isinstance(item, np.ndarray):
+        return torch.from_numpy(item)
+    if isinstance(item, dict):
+        return {k: _to_tensor(v) for k, v in item.items()}
+    if isinstance(item, tuple):
+        return tuple(_to_tensor(v) for v in item)
+    return item
+
+
+def _process_row_group_batch(args: tuple) -> tuple:
+    """Top-level worker: load a batch of row groups in one read and return numpy arrays.
+    Returns (last_rg_idx, concatenated_numpy_tensors)."""
+    parquet_path, rg_indices, max_cands = args
+    data = ak.from_parquet(parquet_path, row_groups=rg_indices)
+    return rg_indices[-1], _to_numpy(build_tensors_from_data(data, max_cands))
+
+
 def _cat(items):
     """Concatenate a list of tensors or dicts of tensors along dim 0."""
     if isinstance(items[0], torch.Tensor):
@@ -214,7 +247,41 @@ def _cat(items):
         raise TypeError(f"Unexpected type in preprocess cat: {type(items[0])}")
 
 
-def preprocess_file(parquet_path: str, max_cands: int, overwrite: bool = False):
+def _write_progress_marker(
+    progress_path: str,
+    parquet_path: str,
+    completed: int,
+    num_row_groups: int,
+    last_rg_idx: int,
+    elapsed_seconds: float,
+):
+    """Overwrite a small marker file with the latest completed row-group status."""
+    tmp_path = f"{progress_path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(
+            "\n".join(
+                [
+                    f"file={parquet_path}",
+                    f"completed={completed}/{num_row_groups}",
+                    f"last_row_group={last_rg_idx + 1}",
+                    f"elapsed_seconds={elapsed_seconds:.1f}",
+                ]
+            )
+            + "\n"
+        )
+    os.replace(tmp_path, progress_path)
+
+
+def preprocess_file(
+    parquet_path: str,
+    max_cands: int,
+    overwrite: bool = False,
+    num_workers: int = 1,
+    heartbeat_seconds: int = 60,
+    verbose_row_groups: bool = False,
+    write_progress_marker: bool = True,
+    rg_batch_size: int = 32,
+):
     pt_path = parquet_path.replace(".parquet", ".pt")
     if os.path.exists(pt_path) and not overwrite:
         print(f"  skip (exists): {pt_path}")
@@ -223,18 +290,133 @@ def preprocess_file(parquet_path: str, max_cands: int, overwrite: bool = False):
     metadata = ak.metadata_from_parquet(parquet_path)
     num_row_groups = metadata["num_row_groups"]
 
-    all_tensors = []
-    for rg_idx in range(num_row_groups):
-        data = ak.from_parquet(parquet_path, row_groups=[rg_idx])
-        tensors = build_tensors_from_data(data, max_cands)
-        all_tensors.append(tensors)
+    # Batch row groups so each worker reads N groups in a single ak.from_parquet call,
+    # dramatically reducing per-task file-open / seek overhead on files with many small row groups.
+    all_indices = list(range(num_row_groups))
+    batches = [
+        all_indices[i : i + rg_batch_size]
+        for i in range(0, num_row_groups, rg_batch_size)
+    ]
+    num_batches = len(batches)
+    args_list = [(parquet_path, batch, max_cands) for batch in batches]
+    desc = os.path.basename(parquet_path)
+    t0 = time.monotonic()
+    progress_path = f"{pt_path}.progress"
+
+    if write_progress_marker:
+        _write_progress_marker(
+            progress_path,
+            parquet_path,
+            completed=0,
+            num_row_groups=num_row_groups,
+            last_rg_idx=-1,
+            elapsed_seconds=0.0,
+        )
+    if num_workers > 1:
+        with mp.Pool(processes=num_workers) as pool:
+            all_tensors = []
+            per_batch_seconds = []
+            completed_batches = 0
+            completed_rgs = 0
+            last_completed_time = t0
+            iterator = pool.imap_unordered(_process_row_group_batch, args_list, chunksize=1)
+            with tqdm(total=num_batches, desc=desc, unit="batch") as pbar:
+                while completed_batches < num_batches:
+                    try:
+                        last_rg_idx, r = iterator.next(timeout=heartbeat_seconds)
+                    except mp.TimeoutError:
+                        now = time.monotonic()
+                        stalled_for = now - last_completed_time
+                        elapsed = now - t0
+                        print(
+                            f"  heartbeat: {completed_batches}/{num_batches} batches done "
+                            f"({completed_rgs}/{num_row_groups} rgs); "
+                            f"no completion for {stalled_for:.1f}s; elapsed {elapsed/60.0:.1f} min"
+                        )
+                        continue
+
+                    now = time.monotonic()
+                    batch_duration = now - last_completed_time
+                    last_completed_time = now
+                    completed_batches += 1
+                    completed_rgs = min(completed_batches * rg_batch_size, num_row_groups)
+                    per_batch_seconds.append(batch_duration)
+
+                    tensor_tuple = _to_tensor(r)
+                    all_tensors.append(tensor_tuple)
+                    pbar.update(1)
+
+                    n_jets_batch = tensor_tuple[0].shape[0]
+                    avg_batch = float(np.mean(per_batch_seconds))
+                    pbar.set_postfix_str(
+                        f"rgs={completed_rgs}/{num_row_groups} jets={n_jets_batch:,} avg={avg_batch:.1f}s/batch"
+                    )
+                    if write_progress_marker:
+                        _write_progress_marker(
+                            progress_path,
+                            parquet_path,
+                            completed=completed_rgs,
+                            num_row_groups=num_row_groups,
+                            last_rg_idx=last_rg_idx,
+                            elapsed_seconds=now - t0,
+                        )
+                    if verbose_row_groups:
+                        print(
+                            f"  batch {completed_batches}/{num_batches} done in {batch_duration:.1f}s "
+                            f"(rg {last_rg_idx + 1}/{num_row_groups}, {n_jets_batch:,} jets, avg {avg_batch:.1f}s)"
+                        )
+    else:
+        all_tensors = []
+        per_batch_seconds = []
+        completed_rgs = 0
+        with tqdm(total=num_batches, desc=desc, unit="batch") as pbar:
+            for batch_idx, (parquet_path_i, rg_indices, max_cands_i) in enumerate(args_list):
+                batch_start = time.monotonic()
+                last_rg_idx, raw = _process_row_group_batch((parquet_path_i, rg_indices, max_cands_i))
+                tensor_tuple = _to_tensor(raw)
+                all_tensors.append(tensor_tuple)
+                pbar.update(1)
+
+                batch_duration = time.monotonic() - batch_start
+                per_batch_seconds.append(batch_duration)
+                completed_rgs = min((batch_idx + 1) * rg_batch_size, num_row_groups)
+                n_jets_batch = tensor_tuple[0].shape[0]
+                avg_batch = float(np.mean(per_batch_seconds))
+                pbar.set_postfix_str(
+                    f"rgs={completed_rgs}/{num_row_groups} jets={n_jets_batch:,} avg={avg_batch:.1f}s/batch"
+                )
+                if write_progress_marker:
+                    _write_progress_marker(
+                        progress_path,
+                        parquet_path,
+                        completed=completed_rgs,
+                        num_row_groups=num_row_groups,
+                        last_rg_idx=last_rg_idx,
+                        elapsed_seconds=time.monotonic() - t0,
+                    )
+                if verbose_row_groups:
+                    print(
+                        f"  batch {batch_idx + 1}/{num_batches} done in {batch_duration:.1f}s "
+                        f"(rg {last_rg_idx + 1}/{num_row_groups}, {n_jets_batch:,} jets, avg {avg_batch:.1f}s)"
+                    )
 
     merged = tuple(
         _cat([t[i] for t in all_tensors]) for i in range(len(all_tensors[0]))
     )
     torch.save(merged, pt_path)
     n_jets = merged[0].shape[0]
+    total_minutes = (time.monotonic() - t0) / 60.0
+    if write_progress_marker:
+        _write_progress_marker(
+            progress_path,
+            parquet_path,
+            completed=num_row_groups,
+            num_row_groups=num_row_groups,
+            last_rg_idx=max(num_row_groups - 1, 0),
+            elapsed_seconds=time.monotonic() - t0,
+        )
     print(f"  saved {n_jets:,} jets \u2192 {pt_path}")
+    print(f"  total preprocess time: {total_minutes:.1f} min")
 
 
 def main():
@@ -258,6 +440,35 @@ def main():
         action="store_true",
         help="Re-process even if .pt already exists.",
     )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="Number of parallel worker processes per file (default: 1). Use os.cpu_count() for maximum parallelism.",
+    )
+    parser.add_argument(
+        "--heartbeat-seconds",
+        type=int,
+        default=60,
+        help="Print heartbeat if no row group completes within this many seconds (default: 60).",
+    )
+    parser.add_argument(
+        "--verbose-row-groups",
+        action="store_true",
+        help="Print one line per completed row group (default: off).",
+    )
+    parser.add_argument(
+        "--no-progress-marker",
+        action="store_true",
+        help="Disable writing <output>.pt.progress marker file with latest completed row group.",
+    )
+    parser.add_argument(
+        "--rg-batch-size",
+        type=int,
+        default=32,
+        help="Number of row groups to read per worker task (default: 32). "
+             "Higher values reduce seek overhead on files with many small row groups.",
+    )
     args = parser.parse_args()
 
     patterns = [
@@ -273,10 +484,20 @@ def main():
         print(f"No parquet files found under {args.input_dir}")
         return
 
-    print(f"Found {len(all_files)} parquet files to process.")
-    for i, path in enumerate(sorted(all_files), 1):
-        print(f"[{i}/{len(all_files)}] {os.path.basename(path)}")
-        preprocess_file(path, args.max_cands, overwrite=args.overwrite)
+    sorted_files = sorted(all_files)
+    print(f"Found {len(sorted_files)} parquet files to process.")
+    for i, path in enumerate(sorted_files, 1):
+        print(f"[{i}/{len(sorted_files)}] {os.path.basename(path)}")
+        preprocess_file(
+            path,
+            args.max_cands,
+            overwrite=args.overwrite,
+            num_workers=args.num_workers,
+            heartbeat_seconds=max(1, args.heartbeat_seconds),
+            verbose_row_groups=args.verbose_row_groups,
+            write_progress_marker=not args.no_progress_marker,
+            rg_batch_size=max(1, args.rg_batch_size),
+        )
 
     print("Done.")
 
