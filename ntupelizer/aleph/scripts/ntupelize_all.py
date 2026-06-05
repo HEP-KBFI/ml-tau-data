@@ -14,7 +14,7 @@ os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 
 INPUT_DIR = "/local/laurits/ALEPH/1994_old/LAST"
-OUTPUT_DIR = "/local/laurits/ALEPH/1994_old_ntupelized"
+OUTPUT_DIR = "/local/laurits/ALEPH/1994_old_ntupelized_new"
 
 orchestration_dir = Path(__file__).parent.parent
 jinja_env = Environment(loader=FileSystemLoader(orchestration_dir / "templates"))

@@ -253,6 +253,7 @@ def get_jet_basic_properties(events: ak.Array):
             "jet_eta": jet_p4.eta,
             "jet_phi": jet_p4.phi,
             "jet_energy": jet_p4.energy,
+            "jet_mass": events["Jets.mass"],
             "jet_nparticles": constituent_counts,
             "jet_sdmass": ak.ones_like(jet_p4.pt)
             * -999.9,  # Softdrop mass. SDmass. For the moment added a placeholder
@@ -269,19 +270,52 @@ def get_jet_basic_properties(events: ak.Array):
     return jet_data
 
 
-def get_all_properties(events: ak.Array, particle_data: ak.Array, jet_data: ak.Array):
-    jc_indices = find_linked_indices(
-        events=events,
-        begin_branch="Jets.particles_begin",
-        end_branch="Jets.particles_end",
+def assign_particles_to_jets_by_angle(
+    particle_data: ak.Array, jet_data: ak.Array
+) -> tuple:
+    """Assign every RecoParticle to its nearest jet by ΔR.
+    Returns (jet_assigned_particles [events, jets, parts], counts_per_jet [events, jets]).
+    """
+    # Pairwise ΔR² between every particle and every jet: [events, n_parts, n_jets]
+    pairs = ak.cartesian(
+        [
+            ak.zip({"eta": particle_data.part_eta, "phi": particle_data.part_phi}),
+            ak.zip({"eta": jet_data.jet_eta, "phi": jet_data.jet_phi}),
+        ],
+        axis=1,
+        nested=True,
     )
-    # Assign the particles with their properties to the jets they belong to
-    jet_constituent_properties = particle_data[jc_indices]
-    flat_particles = ak.flatten(jet_constituent_properties)
-    flat_counts = ak.flatten(jet_data.jet_nparticles, axis=None)
-    true_counts = ak.num(jet_data.jet_nparticles)
-    jet_wise_particles = ak.unflatten(flat_particles, flat_counts)
-    jet_assigned_particles = ak.unflatten(jet_wise_particles, true_counts)
+    deta = pairs["0"]["eta"] - pairs["1"]["eta"]
+    dphi_raw = pairs["0"]["phi"] - pairs["1"]["phi"]
+    dphi = np.arctan2(np.sin(dphi_raw), np.cos(dphi_raw))
+    dR2 = deta**2 + dphi**2
+
+    # Nearest jet per particle: [events, n_parts]
+    nearest_jet_idx = ak.argmin(dR2, axis=-1)
+
+    # Count particles per jet using global bincount
+    n_jets = ak.to_numpy(ak.num(jet_data.jet_eta))
+    n_parts = ak.to_numpy(ak.num(nearest_jet_idx))
+    event_idx = np.repeat(np.arange(len(n_jets)), n_parts)
+    jet_offset = np.concatenate([[0], np.cumsum(n_jets)[:-1]])
+    global_jet_idx = ak.to_numpy(ak.flatten(nearest_jet_idx)) + jet_offset[event_idx]
+    counts_flat = np.bincount(global_jet_idx, minlength=int(np.sum(n_jets)))
+    counts_per_jet = ak.unflatten(counts_flat, n_jets)
+
+    # Sort particles by jet assignment, then unflatten into [events, jets, parts]
+    sort_order = ak.argsort(nearest_jet_idx, axis=1)
+    sorted_particles = particle_data[sort_order]
+    flat_particles = ak.flatten(sorted_particles)
+    jet_wise = ak.unflatten(flat_particles, counts_flat)
+    jet_assigned_particles = ak.unflatten(jet_wise, n_jets)
+
+    return jet_assigned_particles, counts_per_jet
+
+
+def get_all_properties(events: ak.Array, particle_data: ak.Array, jet_data: ak.Array):
+    jet_assigned_particles, counts_per_jet = assign_particles_to_jets_by_angle(
+        particle_data, jet_data
+    )
 
     jet_constituent_p4_sums = ak.sum(jet_assigned_particles.part_p4, axis=-1)
 
@@ -289,9 +323,12 @@ def get_all_properties(events: ak.Array, particle_data: ak.Array, jet_data: ak.A
         {
             "part_ptrel": jet_assigned_particles.part_pt / jet_data.jet_pt,
             "part_erel": jet_assigned_particles.part_energy / jet_data.jet_energy,
-            "part_etarel": jet_assigned_particles.part_eta
-            - jet_data.jet_eta,  # Honestly, what is the actual difference?
-            "part_phirel": jet_assigned_particles.part_phi - jet_data.jet_phi,
+            "part_signed_deta": f.signedDeltaEta(
+                jet_assigned_particles.part_eta, jet_data.jet_eta
+            ),
+            "part_signed_dphi": f.signedDeltaPhi(
+                jet_assigned_particles.part_phi, jet_data.jet_phi
+            ),
             "part_deltaR": f.deltaR_etaPhi(
                 jet_assigned_particles.part_eta,
                 jet_assigned_particles.part_phi,
@@ -304,7 +341,12 @@ def get_all_properties(events: ak.Array, particle_data: ak.Array, jet_data: ak.A
             "jet_pt_from_p4s": jet_constituent_p4_sums.pt,
             "jet_eta_from_p4s": jet_constituent_p4_sums.eta,
             "jet_phi_from_p4s": jet_constituent_p4_sums.phi,
-            **{field: jet_data[field] for field in jet_data.fields},
+            "jet_nparticles": counts_per_jet,
+            **{
+                field: jet_data[field]
+                for field in jet_data.fields
+                if field != "jet_nparticles"
+            },
             **{
                 field: jet_assigned_particles[field]
                 for field in jet_assigned_particles.fields
