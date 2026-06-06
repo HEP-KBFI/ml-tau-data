@@ -254,7 +254,6 @@ def get_jet_basic_properties(events: ak.Array):
             "jet_phi": jet_p4.phi,
             "jet_energy": jet_p4.energy,
             "jet_mass": events["Jets.mass"],
-            "jet_nparticles": constituent_counts,
             "jet_sdmass": ak.ones_like(jet_p4.pt)
             * -999.9,  # Softdrop mass. SDmass. For the moment added a placeholder
             "jet_tau1": ak.ones_like(jet_p4.pt)
@@ -342,11 +341,7 @@ def get_all_properties(events: ak.Array, particle_data: ak.Array, jet_data: ak.A
             "jet_eta_from_p4s": jet_constituent_p4_sums.eta,
             "jet_phi_from_p4s": jet_constituent_p4_sums.phi,
             "jet_nparticles": counts_per_jet,
-            **{
-                field: jet_data[field]
-                for field in jet_data.fields
-                if field != "jet_nparticles"
-            },
+            **{field: jet_data[field] for field in jet_data.fields},
             **{
                 field: jet_assigned_particles[field]
                 for field in jet_assigned_particles.fields
@@ -375,4 +370,12 @@ def ntupelize_file(input_path: str, output_path: str):
     events = load_file_contents(path=input_path, tree_name="events")
     events = events[ak.num(events["Jets.energy"]) > 0]
     dataset = construct_jet_based_dataset(events)
+    bad_particle = (
+        (dataset.part_pt <= 0)
+        | (dataset.part_pt == -999.9)
+        | (~np.isfinite(dataset.part_pt))
+    )
+    jet_contains_bad_particle = ak.any(bad_particle, axis=-1)
+    valid_jets = (dataset.jet_pt > 0) & np.isfinite(dataset.jet_eta)
+    dataset = dataset[(~jet_contains_bad_particle) * valid_jets]
     ak.to_parquet(dataset, output_path, row_group_size=1024)
