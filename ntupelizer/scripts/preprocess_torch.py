@@ -34,7 +34,9 @@ def prepare_one_hot_encoding(reduced_decaymodes: np.ndarray) -> np.ndarray:
 def stack_and_pad_features(features: ak.Array, max_cands: int) -> np.ndarray:
     padded = [
         ak.to_numpy(
-            ak.fill_none(ak.pad_none(features[field], max_cands, clip=True), 0.0)
+            ak.to_regular(
+                ak.fill_none(ak.pad_none(features[field], max_cands, clip=True), 0.0)
+            )
         )
         for field in features.fields
     ]

@@ -37,22 +37,11 @@ def reinitialize_p4(p4_obj: ak.Array):
         "tau": "mass",
         "t": "energy",
         "rho": "pt",
+        "phi": "phi",
+        "eta": "eta",
     }
-    p4 = vector.awk(
-        ak.zip({name_map.get(field, field): p4_obj[field] for field in p4_obj.fields})
-    )
-    # Now make it so that the 4-vector is always saved in a similar fashion:
-    p4 = vector.awk(
-        ak.zip(
-            {
-                "pt": p4.pt,
-                "eta": p4.eta,
-                "phi": p4.phi,
-                "energy": p4.t,
-            }
-        )
-    )
-    return p4
+    # Create the vector directly from available fields using standardized names
+    return vector.zip({name_map.get(field, field): p4_obj[field] for field in p4_obj.fields})
 
 
 def get_jet_constituent_property(property_, constituent_idx, num_ptcls_per_jet):
