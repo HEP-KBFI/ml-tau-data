@@ -1,20 +1,22 @@
-import os
 import glob
-import hydra
+
+# from ntupelizer.aleph.tools import ntupelize_aleph as na
+import os
 import subprocess
 from pathlib import Path
+
+import hydra
 from jinja2 import Environment, FileSystemLoader
 from omegaconf import DictConfig
-from ntupelizer.aleph.tools import ntupelize_aleph as na
 
-import os
+from ntupelizer.aleph.tools import create_aleph as na
 
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 
 INPUT_DIR = "/local/laurits/ALEPH/1994_old/LAST"
-OUTPUT_DIR = "/local/laurits/ALEPH/1994_old_ntupelized_new"
+OUTPUT_DIR = "/local/laurits/ALEPH/ALEPH"
 
 orchestration_dir = Path(__file__).parent.parent
 jinja_env = Environment(loader=FileSystemLoader(orchestration_dir / "templates"))
@@ -46,7 +48,7 @@ def submit_slurm_job(input_paths: str, output_dir: str, idx: int) -> str:
         err_dir=err_dir,
         out_dir=out_dir,
         partition="main",
-        walltime="01:00:00",
+        walltime="2-00:00:00",
         memory=8000,
         cpus=1,
         ntasks=1,
@@ -96,7 +98,11 @@ def split_list_into_chunks(lst, num_chunks=20):
 def main(cfg: DictConfig) -> None:
     input_wcp = os.path.join(INPUT_DIR, "*", "data_*.root")
     input_paths = list(glob.glob(input_wcp))
-    job_chunks = split_list_into_chunks(input_paths, num_chunks=30)
+    num_chunks = -1
+    if num_chunks > 0:
+        job_chunks = split_list_into_chunks(input_paths, num_chunks=30)
+    else:
+        job_chunks = [[input_path] for input_path in input_paths]
     for i, input_chunk in enumerate(job_chunks):
         submit_slurm_job(input_paths=input_chunk, output_dir=OUTPUT_DIR, idx=i)
 
