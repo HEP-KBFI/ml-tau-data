@@ -1,10 +1,11 @@
+# from ntupelizer.aleph.tools import ntupelize_aleph as na
 import os
 import time
+
 import hydra
 from omegaconf import DictConfig
-from ntupelizer.aleph.tools import ntupelize_aleph as na
 
-import os
+from ntupelizer.aleph.tools import create_aleph as na
 
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -19,7 +20,7 @@ def main(cfg: DictConfig) -> None:
     for input_path, output_path in zip(input_files, output_files):
         na.ntupelize_file(input_path=input_path, output_path=output_path)
     end_time = time.time()
-    print(f"Finished processing {len(input_files)} files in {end_time-start_time} s.")
+    print(f"Finished processing {len(input_files)} files in {end_time - start_time} s.")
 
 
 if __name__ == "__main__":
