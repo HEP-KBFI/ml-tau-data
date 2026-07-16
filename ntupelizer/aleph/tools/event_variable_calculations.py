@@ -201,16 +201,18 @@ def get_event_variables(particle_data: ak.Array, jet_data: ak.Array) -> dict:
     """
     particle_counts = compute_particle_counts(particle_data)
     eigenvalues = compute_eigenvalues(particle_data)
-    return {
-        "event_met": compute_met(particle_data),
-        "event_num_jets": compute_num_jets(jet_data),
-        "event_ht": compute_ht(jet_data),
-        "event_thrust": compute_thrust(particle_data),
-        "event_aplanarity": compute_aplanarity(eigenvalues=eigenvalues),
-        "event_sphericity": compute_sphericity(eigenvalues=eigenvalues),
-        "event_num_electrons": particle_counts.num_electrons,
-        "event_num_muons": particle_counts.num_muons,
-        "event_num_photons": particle_counts.num_photons,
-        "event_num_charged_hadrons": particle_counts.num_charged_hadrons,
-        "event_num_neutral_hadrons": particle_counts.num_neutral_hadrons,
-    }
+    return ak.Array(
+        {
+            "event_met": compute_met(particle_data),
+            "event_num_jets": compute_num_jets(jet_data),
+            "event_ht": compute_ht(jet_data),
+            "event_thrust": compute_thrust(particle_data),
+            "event_aplanarity": compute_aplanarity(eigenvalues=eigenvalues),
+            "event_sphericity": compute_sphericity(eigenvalues=eigenvalues),
+            "event_num_electrons": particle_counts.num_electrons,
+            "event_num_muons": particle_counts.num_muons,
+            "event_num_photons": particle_counts.num_photons,
+            "event_num_charged_hadrons": particle_counts.num_charged_hadrons,
+            "event_num_neutral_hadrons": particle_counts.num_neutral_hadrons,
+        }
+    )

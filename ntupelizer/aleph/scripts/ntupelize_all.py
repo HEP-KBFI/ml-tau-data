@@ -1,28 +1,25 @@
 import glob
-
-# from ntupelizer.aleph.tools import ntupelize_aleph as na
 import os
-import subprocess
 from pathlib import Path
 
 import hydra
 from jinja2 import Environment, FileSystemLoader
 from omegaconf import DictConfig
 
+# from ntupelizer.aleph.tools import ntupelize_aleph as na
 from ntupelizer.aleph.tools import create_aleph as na
 
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 
-INPUT_DIR = "/local/laurits/ALEPH/1994_old/LAST"
-OUTPUT_DIR = "/local/laurits/ALEPH/ALEPH_event"
-
 orchestration_dir = Path(__file__).parent.parent
 jinja_env = Environment(loader=FileSystemLoader(orchestration_dir / "templates"))
 
 
-def submit_slurm_job(input_paths: str, output_dir: str, idx: int) -> str:
+def submit_slurm_job(
+    input_paths: str, output_dir: str, output_level: str, idx: int
+) -> str:
     """Submit a SLURM job for processing a chunk of files."""
     output_paths = []
     for input_path in input_paths:
@@ -57,28 +54,11 @@ def submit_slurm_job(input_paths: str, output_dir: str, idx: int) -> str:
         processing_script="/home/laurits/ml-tau/ml-tau-data/ntupelizer/aleph/scripts/ntupelize_list.py",
         input_paths=input_paths_str,
         output_paths=output_paths_str,
+        output_level=output_level,
     )
 
     with open(job_script_path, "wt") as f:
         f.write(job_script_content)
-
-    # # Submit job
-    # cmd = ["sbatch", str(job_script_path)]
-    # try:
-    #     result = subprocess.run(
-    #         cmd,
-    #         stdout=subprocess.PIPE,
-    #         stderr=subprocess.PIPE,
-    #         universal_newlines=True,
-    #         check=True,
-    #     )
-    #     job_id = result.stdout.strip().split()[-1]
-    #     return job_id
-
-    # except subprocess.CalledProcessError as e:
-    #     print("sbatch failed!")
-    #     print("stdout:", e.stdout)
-    #     print("stderr:", e.stderr)
 
 
 def split_list_into_chunks(lst, num_chunks=20):
@@ -94,17 +74,26 @@ def split_list_into_chunks(lst, num_chunks=20):
     return chunks
 
 
-@hydra.main(version_base=None)
+@hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
-    input_wcp = os.path.join(INPUT_DIR, "*", "data_*.root")
+    input_dir = cfg.input_dir
+    output_dir = cfg.output_dir
+    num_chunks = cfg.num_chunks
+    output_level = cfg.output_level
+
+    input_wcp = os.path.join(input_dir, "*", "data_*.root")
     input_paths = list(glob.glob(input_wcp))
-    num_chunks = -1
     if num_chunks > 0:
-        job_chunks = split_list_into_chunks(input_paths, num_chunks=30)
+        job_chunks = split_list_into_chunks(input_paths, num_chunks=num_chunks)
     else:
         job_chunks = [[input_path] for input_path in input_paths]
     for i, input_chunk in enumerate(job_chunks):
-        submit_slurm_job(input_paths=input_chunk, output_dir=OUTPUT_DIR, idx=i)
+        submit_slurm_job(
+            input_paths=input_chunk,
+            output_dir=output_dir,
+            output_level=output_level,
+            idx=i,
+        )
 
 
 if __name__ == "__main__":

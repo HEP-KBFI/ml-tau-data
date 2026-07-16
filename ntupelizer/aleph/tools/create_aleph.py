@@ -471,7 +471,6 @@ def ntupelize_file(
         ak.to_parquet(jet_dataset, output_path, row_group_size=1024)
     if event_level:
         # Merge jet-level [events, jets, ...] with event-level [events] fields
-        # event_dataset = ak.Array({**combined_jet, **particle_data})
         bad_particle = (
             (particle_data.part_pt <= 0)
             | (particle_data.part_energy >= 45.6)
@@ -495,4 +494,12 @@ def ntupelize_file(
         event_dataset = evc.get_event_variables(
             particle_data=particle_data, jet_data=combined_jet
         )
-        ak.to_parquet(event_dataset, output_path, row_group_size=1024)
+        final_dataset = ak.zip(
+            {
+                **{f: event_dataset[f] for f in event_dataset.fields},
+                **{f: combined_jet[f] for f in combined_jet.fields},
+                **{f: particle_data[f] for f in particle_data.fields},
+            },
+            depth_limit=1,
+        )
+        ak.to_parquet(final_dataset, output_path, row_group_size=1024)

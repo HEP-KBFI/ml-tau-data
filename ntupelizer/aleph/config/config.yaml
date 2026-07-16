@@ -1,0 +1,4 @@
+input_dir: /local/laurits/ALEPH/1994_old/LAST
+output_dir: /local/laurits/ALEPH/ALEPH_event
+num_chunks: 189
+output_level: event # "event" or "jet"

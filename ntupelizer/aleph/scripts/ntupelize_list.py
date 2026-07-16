@@ -16,9 +16,17 @@ os.environ["MKL_NUM_THREADS"] = "1"
 def main(cfg: DictConfig) -> None:
     input_files = cfg.input_paths
     output_files = cfg.output_paths
+    output_level = cfg.get("output_level", "event")
+    jet_level = output_level == "jet"
+    event_level = output_level == "event"
     start_time = time.time()
     for input_path, output_path in zip(input_files, output_files):
-        na.ntupelize_file(input_path=input_path, output_path=output_path)
+        na.ntupelize_file(
+            input_path=input_path,
+            output_path=output_path,
+            jet_level=jet_level,
+            event_level=event_level,
+        )
     end_time = time.time()
     print(f"Finished processing {len(input_files)} files in {end_time - start_time} s.")
 
