@@ -470,28 +470,29 @@ def ntupelize_file(
         jet_dataset = jet_dataset[(~jet_contains_bad_particle) * valid_jets]
         ak.to_parquet(jet_dataset, output_path, row_group_size=1024)
     if event_level:
-        # Compute event-level variables from particle data and jet variables
-        combined_event = evc.get_event_variables(
-            particle_data=particle_data, jet_data=combined_jet
-        )
         # Merge jet-level [events, jets, ...] with event-level [events] fields
-        event_dataset = ak.Array({**combined_jet, **combined_event})
+        # event_dataset = ak.Array({**combined_jet, **particle_data})
         bad_particle = (
-            (event_dataset.part_pt <= 0)
-            | (event_dataset.part_energy >= 45.6)
-            | (event_dataset.part_pt == -999.9)
-            | (~np.isfinite(event_dataset.part_pt))
+            (particle_data.part_pt <= 0)
+            | (particle_data.part_energy >= 45.6)
+            | (particle_data.part_pt == -999.9)
+            | (~np.isfinite(particle_data.part_pt))
         )
         event_contains_bad_particle = ak.any(bad_particle, axis=-1)
         bad_jets = (
-            (event_dataset.jet_pt < 0)
-            | ~np.isfinite(event_dataset.jet_eta)
-            | (event_dataset.jet_energy > 91.2)
+            (combined_jet.jet_pt < 0)
+            | ~np.isfinite(combined_jet.jet_eta)
+            | (combined_jet.jet_energy > 91.2)
         )
         event_contains_bad_jet = ak.any(bad_jets, axis=-1)
-        event_dataset = event_dataset[
-            (~event_contains_bad_particle) * (~event_contains_bad_jet)
-        ]
-        event_mask = ak.num(event_dataset.jet_pt) > 0
-        event_dataset = event_dataset[event_mask]
+        event_mask_ = ak.num(combined_jet.jet_pt) > 0
+        event_mask = (
+            (~event_contains_bad_particle) & (~event_contains_bad_jet) & event_mask_
+        )
+        particle_data = particle_data[event_mask]
+        combined_jet = combined_jet[event_mask]
+        # Compute event-level variables from particle data and jet variables
+        event_dataset = evc.get_event_variables(
+            particle_data=particle_data, jet_data=combined_jet
+        )
         ak.to_parquet(event_dataset, output_path, row_group_size=1024)
