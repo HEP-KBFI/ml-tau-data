@@ -13,21 +13,10 @@ def compute_met(particle_data: ak.Array) -> ak.Array:
     Returns:
         [events] scalar MET values
     """
-    # TODO: implement actual MET calculation
-    return ak.zeros_like(ak.num(particle_data.part_px, axis=0), dtype=np.float64)
-
-
-def compute_missing_pt(particle_data: ak.Array) -> ak.Array:
-    """Missing pT (same as MET for now, kept separate for flexibility).
-
-    Args:
-        particle_data: [events, particles] with part_px, part_py fields
-
-    Returns:
-        [events] scalar missing pT values
-    """
-    # TODO: implement actual missing pt calculation
-    return ak.zeros_like(ak.num(particle_data.part_px, axis=0), dtype=np.float64)
+    px_sum = ak.sum(particle_data.part_px, axis=-1)
+    py_sum = ak.sum(particle_data.part_py, axis=-1)
+    met = np.sqrt(px_sum**2 + py_sum**2)
+    return met
 
 
 def compute_num_jets(jet_data: ak.Array) -> ak.Array:
@@ -54,17 +43,33 @@ def compute_ht(jet_data: ak.Array) -> ak.Array:
     return ak.sum(jet_data.jet_pt, axis=-1)
 
 
-def compute_sum_et(particle_data: ak.Array) -> ak.Array:
-    """Sum of transverse energy of all particles in the event.
+def thrust_3d(px, py, pz, max_iter=100):
+    """For LHC data should consider probably 2d thrust."""
+    p = np.stack([px, py, pz], axis=1)
 
-    Args:
-        particle_data: [events, particles] with part_pt (or part_energy * sin(theta)) fields
+    # total momentum magnitude
+    p_abs = np.linalg.norm(p, axis=1)
+    denom = np.sum(p_abs)
 
-    Returns:
-        [events] scalar sum of E_T
-    """
-    # TODO: verify this is the correct E_T definition for ALEPH
-    return ak.sum(particle_data.part_pt, axis=-1)
+    # initial axis: direction of total momentum
+    n = np.sum(p, axis=0)
+    n = n / np.linalg.norm(n)
+
+    for _ in range(max_iter):
+        projections = p @ n
+        signs = np.sign(projections)
+
+        new_n = np.sum(signs[:, None] * p, axis=0)
+        new_n = new_n / np.linalg.norm(new_n)
+
+        if np.allclose(new_n, n):
+            break
+
+        n = new_n
+
+    T = np.sum(np.abs(p @ n)) / denom
+
+    return T, n
 
 
 def compute_thrust(particle_data: ak.Array) -> ak.Array:
@@ -76,40 +81,90 @@ def compute_thrust(particle_data: ak.Array) -> ak.Array:
     Returns:
         [events] thrust values (between 0.5 and 1.0)
     """
-    # TODO: implement actual thrust calculation
-    return ak.zeros_like(ak.num(particle_data.part_px, axis=0), dtype=np.float64)
+    thrust_values = []
+
+    for event_px, event_py, event_pz in zip(
+        particle_data.part_px, particle_data.part_py, particle_data.part_pz
+    ):
+        T, _ = thrust_3d(
+            np.asarray(event_px), np.asarray(event_py), np.asarray(event_pz)
+        )
+        thrust_values.append(T)
+
+    thrust_values = np.array(thrust_values)
+    return thrust_values
 
 
-def compute_aplanarity(particle_data: ak.Array) -> ak.Array:
+def compute_aplanarity(eigenvalues: ak.Array) -> ak.Array:
     """Event aplanarity from the momentum tensor eigenvalues.
 
     Aplanarity = 3/2 * lambda_3 where lambda_3 is the smallest eigenvalue
     of the normalized momentum tensor.
 
     Args:
-        particle_data: [events, particles] with part_px, part_py, part_pz fields
+        eigenvalues: [events, 3] eigenvalues (ascending order: lambda3 <= lambda2 <= lambda1)
 
     Returns:
         [events] aplanarity values
     """
-    # TODO: implement actual aplanarity calculation
-    return ak.zeros_like(ak.num(particle_data.part_px, axis=0), dtype=np.float64)
+    aplanarity = (3 / 2) * eigenvalues[:, 0]
+    return aplanarity
 
 
-def compute_sphericity(particle_data: ak.Array) -> ak.Array:
+def compute_eigenvalues(particle_data: ak.Array) -> ak.Array:
+    """Compute the eigenvalues of the normalized momentum tensor.
+
+    Args:
+        particle_data: [events, particles] with part_px, part_py, part_pz fields
+
+    Returns:
+        [events, 3] eigenvalues (ascending order: lambda3 <= lambda2 <= lambda1)
+    """
+    px = particle_data.part_px
+    py = particle_data.part_py
+    pz = particle_data.part_pz
+
+    p2 = px**2 + py**2 + pz**2
+
+    norm = ak.sum(p2, axis=-1)
+
+    Sxx = ak.sum(px * px, axis=-1) / norm
+    Syy = ak.sum(py * py, axis=-1) / norm
+    Szz = ak.sum(pz * pz, axis=-1) / norm
+
+    Sxy = ak.sum(px * py, axis=-1) / norm
+    Sxz = ak.sum(px * pz, axis=-1) / norm
+    Syz = ak.sum(py * pz, axis=-1) / norm
+
+    tensor = np.stack(
+        [
+            np.stack([Sxx, Sxy, Sxz], axis=-1),
+            np.stack([Sxy, Syy, Syz], axis=-1),
+            np.stack([Sxz, Syz, Szz], axis=-1),
+        ],
+        axis=-2,
+    )
+
+    eigenvalues = np.linalg.eigvalsh(tensor)
+    return eigenvalues
+
+
+def compute_sphericity(eigenvalues: ak.Array) -> ak.Array:
     """Event sphericity from the momentum tensor eigenvalues.
 
     Sphericity = 3/2 * (lambda_2 + lambda_3) where lambda_i are the
     eigenvalues of the normalized momentum tensor.
 
     Args:
-        particle_data: [events, particles] with part_px, part_py, part_pz fields
+        eigenvalues: [events, 3] eigenvalues (ascending order: lambda3 <= lambda2 <= lambda1)
 
     Returns:
         [events] sphericity values (between 0 and 1)
     """
-    # TODO: implement actual sphericity calculation
-    return ak.zeros_like(ak.num(particle_data.part_px, axis=0), dtype=np.float64)
+    lambda2 = eigenvalues[:, 1]
+    lambda3 = eigenvalues[:, 0]
+    sphericity = 1.5 * (lambda2 + lambda3)
+    return sphericity
 
 
 def compute_particle_counts(particle_data: ak.Array) -> ak.Array:
@@ -145,15 +200,14 @@ def get_event_variables(particle_data: ak.Array, jet_data: ak.Array) -> dict:
         dict of field_name -> [events] arrays
     """
     particle_counts = compute_particle_counts(particle_data)
+    eigenvalues = compute_eigenvalues(particle_data)
     return {
         "event_met": compute_met(particle_data),
-        "event_missing_pt": compute_missing_pt(particle_data),
         "event_num_jets": compute_num_jets(jet_data),
         "event_ht": compute_ht(jet_data),
-        "event_sum_et": compute_sum_et(particle_data),
         "event_thrust": compute_thrust(particle_data),
-        "event_aplanarity": compute_aplanarity(particle_data),
-        "event_sphericity": compute_sphericity(particle_data),
+        "event_aplanarity": compute_aplanarity(eigenvalues=eigenvalues),
+        "event_sphericity": compute_sphericity(eigenvalues=eigenvalues),
         "event_num_electrons": particle_counts.num_electrons,
         "event_num_muons": particle_counts.num_muons,
         "event_num_photons": particle_counts.num_photons,
