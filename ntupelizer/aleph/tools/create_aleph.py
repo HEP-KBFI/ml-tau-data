@@ -10,6 +10,7 @@ import vector
 
 from ntupelizer.tools import features as f
 
+from . import event_variable_calculations as evc
 from . import jet_variable_calculations as jvc
 
 
@@ -399,7 +400,13 @@ def get_all_properties(
 
 
 def construct_jet_based_dataset(events: ak.Array):
-    """Cluster particles to jets with fastjet (R=0.8) and build the combined dict at [events, jets, ...] level."""
+    """Cluster particles to jets with fastjet (R=0.8) and build the combined dict at [events, jets, ...] level.
+
+    Returns:
+        Tuple of (jet_data_dict, particle_data):
+        - jet_data_dict: [events, jets, ...] combined jet + particle properties
+        - particle_data: [events, particles] full particle data for event-level computations
+    """
     particle_data = get_cand_info(events=events)
 
     # Cluster particles into jets using fastjet
@@ -433,25 +440,58 @@ def construct_jet_based_dataset(events: ak.Array):
         jet_data=jet_data,
         jet_assigned_particles=jet_assigned_particles,
     )
-    return all_properties
+
+    return all_properties, particle_data
 
 
-def ntupelize_file(input_path: str, output_path: str):
+def ntupelize_file(
+    input_path: str, output_path: str, jet_level: bool = False, event_level: bool = True
+):
     events = load_file_contents(path=input_path, tree_name="events")
-    combined = construct_jet_based_dataset(events)
+    combined_jet, particle_data = construct_jet_based_dataset(events)
+
     # Flatten from [events, jets, ...] to [total_jets, ...] at the very end
-    dataset = ak.Array({k: ak.flatten(v, axis=1) for k, v in combined.items()})
-    bad_particle = (
-        (dataset.part_pt <= 0)
-        | (dataset.part_energy >= 45.6)
-        | (dataset.part_pt == -999.9)
-        | (~np.isfinite(dataset.part_pt))
-    )
-    jet_contains_bad_particle = ak.any(bad_particle, axis=-1)
-    valid_jets = (
-        (dataset.jet_pt > 0)
-        & np.isfinite(dataset.jet_eta)
-        & (dataset.jet_energy <= 91.2)
-    )
-    dataset = dataset[(~jet_contains_bad_particle) * valid_jets]
-    ak.to_parquet(dataset, output_path, row_group_size=1024)
+    if jet_level:
+        jet_dataset = ak.Array(
+            {k: ak.flatten(v, axis=1) for k, v in combined_jet.items()}
+        )
+        bad_particle = (
+            (jet_dataset.part_pt <= 0)
+            | (jet_dataset.part_energy >= 45.6)
+            | (jet_dataset.part_pt == -999.9)
+            | (~np.isfinite(jet_dataset.part_pt))
+        )
+        jet_contains_bad_particle = ak.any(bad_particle, axis=-1)
+        valid_jets = (
+            (jet_dataset.jet_pt > 0)
+            & np.isfinite(jet_dataset.jet_eta)
+            & (jet_dataset.jet_energy <= 91.2)
+        )
+        jet_dataset = jet_dataset[(~jet_contains_bad_particle) * valid_jets]
+        ak.to_parquet(jet_dataset, output_path, row_group_size=1024)
+    if event_level:
+        # Compute event-level variables from particle data and jet variables
+        combined_event = evc.get_event_variables(
+            particle_data=particle_data, jet_data=combined_jet
+        )
+        # Merge jet-level [events, jets, ...] with event-level [events] fields
+        event_dataset = ak.Array({**combined_jet, **combined_event})
+        bad_particle = (
+            (event_dataset.part_pt <= 0)
+            | (event_dataset.part_energy >= 45.6)
+            | (event_dataset.part_pt == -999.9)
+            | (~np.isfinite(event_dataset.part_pt))
+        )
+        event_contains_bad_particle = ak.any(bad_particle, axis=-1)
+        bad_jets = (
+            (event_dataset.jet_pt < 0)
+            | ~np.isfinite(event_dataset.jet_eta)
+            | (event_dataset.jet_energy > 91.2)
+        )
+        event_contains_bad_jet = ak.any(bad_jets, axis=-1)
+        event_dataset = event_dataset[
+            (~event_contains_bad_particle) * (~event_contains_bad_jet)
+        ]
+        event_mask = ak.num(event_dataset.jet_pt) > 0
+        event_dataset = event_dataset[event_mask]
+        ak.to_parquet(event_dataset, output_path, row_group_size=1024)
