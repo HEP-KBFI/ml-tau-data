@@ -189,6 +189,12 @@ def compute_particle_counts(particle_data: ak.Array) -> ak.Array:
     )
 
 
+def compute_jettiness(jet_data: ak.Array) -> ak.Array:
+    """Compute jettiness for each event."""
+    TODO: Maybe worth implementing also this?
+    pass
+
+
 def get_event_variables(particle_data: ak.Array, jet_data: ak.Array) -> dict:
     """Compute all event-level variables and return as a flat dict of [events] arrays.
 
