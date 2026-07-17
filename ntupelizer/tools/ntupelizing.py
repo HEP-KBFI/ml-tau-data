@@ -1,17 +1,18 @@
-import vector
-import uproot
-import numpy as np
-import awkward as ak
-from particle import pdgid
 from typing import Optional
-from omegaconf import DictConfig
-from ntupelizer.tools import general as g
+
+import awkward as ak
+import numpy as np
+import uproot
+import vector
+from omegaconf import DictConfig, OmegaConf
+from particle import pdgid
+
 from ntupelizer.tools import clustering as cl
-from ntupelizer.tools import particle_filters as pfl
-from ntupelizer.tools import matching as m
 from ntupelizer.tools import gen_tau_info_matcher as gtim
+from ntupelizer.tools import general as g
 from ntupelizer.tools import lifetime as lt
-from omegaconf import OmegaConf
+from ntupelizer.tools import matching as m
+from ntupelizer.tools import particle_filters as pfl
 
 
 class EDM4HEPNtupelizer:
@@ -284,3 +285,29 @@ class LCIOROOTNtuplelizer(EDM4HEPNtupelizer):
             # --- Reco ↔ track indices ---
             arrays["idx_track"] = arrays["_PandoraPFOs_tracks.index"]
         return arrays
+
+
+class DecayProductNtupelizer(PodioROOTNtuplelizer):
+    def __init__(self, cfg: DictConfig):
+        super().__init__(cfg=cfg)
+
+    def retrieve_dummy_tau_values(self, gen_jets):
+        info = super().retrieve_dummy_tau_values(gen_jets)
+        # Add empty jagged arrays for the three extra daughter properties
+        empty = ak.Array([[[] for _ in ev] for ev in gen_jets])
+        info["gen_jet_tau_vis_daughter_p4s"] = empty
+        info["gen_jet_tau_vis_daughter_pdgs"] = empty
+        info["gen_jet_tau_vis_daughter_charges"] = empty
+        return info
+
+    def retrieve_jet_tau_info(
+        self, arrays: ak.Array, gen_jets: ak.Array, signal_sample: bool = True
+    ):
+        if signal_sample:
+            matcher = gtim.GenTauInfoMatcherWithDaughters(
+                arrays=arrays, gen_jets=gen_jets, idx_map_branch=self.idx_map_branch
+            )
+            jet_tau_info = matcher.fill_tau_info()
+        else:
+            jet_tau_info = self.retrieve_dummy_tau_values(gen_jets=gen_jets)
+        return jet_tau_info
