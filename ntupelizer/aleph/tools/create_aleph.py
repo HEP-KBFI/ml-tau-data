@@ -1,17 +1,16 @@
-"""This tool is for using the Jets coming from ALEPH dataset and assigning the particles by angle, since the association map is broken.
-However, adding the particles by angle (up to dr=0.8) shows a discrepancy between the Jet p4 and the jet p4 from particle p4, which was not there having no dR cut"""
+"""This tool is clustering the jets with anti-kt for ee instead of relying on the association map and the jets coming directly from the ALEPH dataset."""
 
 from typing import List, Optional
 
 import awkward as ak
-import hydra
+import fastjet
 import numpy as np
 import uproot
 import vector
-from omegaconf import DictConfig
 
 from ntupelizer.tools import features as f
 
+from . import event_variable_calculations as evc
 from . import jet_variable_calculations as jvc
 
 
@@ -238,63 +237,101 @@ def find_linked_indices(
     return ak.flatten(indices, axis=-1)
 
 
-def get_jet_basic_properties(
-    events: ak.Array,
-    jet_assigned_particles: ak.Array = None,
-    counts_per_jet: ak.Array = None,
-    jet_p4=None,
-):
-    if jet_p4 is None:
-        jet_p4 = vector.awk(
-            ak.zip(
-                {
-                    "energy": events["Jets.energy"],
-                    "px": events["Jets.momentum.x"],
-                    "py": events["Jets.momentum.y"],
-                    "pz": events["Jets.momentum.z"],
-                }
-            )
-        )
-    # constituents_begins = events["Jets.particles_begin"]
-    # constituents_ends = events["Jets.particles_end"]
-    # constituent_counts = constituents_ends - constituents_begins
+def cluster_particles_to_jets(
+    particle_data: ak.Array, deltar: float = 0.8, min_pt: float = 0.0
+) -> tuple:
+    """Cluster particles into jets using fastjet ee_genkt_algorithm.
 
+    Returns (jet_p4s, constituent_indices) where both are [events, jets, ...].
+    """
+    # Use the same format as particle_filters.py: mass + px + py + pz via vector.awk
+    particles_p4 = vector.awk(
+        ak.zip(
+            {
+                "mass": particle_data.part_mass,
+                "px": particle_data.part_px,
+                "py": particle_data.part_py,
+                "pz": particle_data.part_pz,
+            }
+        )
+    )
+
+    jetdef = fastjet.JetDefinition2Param(fastjet.ee_genkt_algorithm, deltar, -1)
+    cluster = fastjet.ClusterSequence(particles_p4, jetdef)
+    jets = vector.awk(cluster.inclusive_jets(min_pt=min_pt))
+    jets = vector.awk(
+        ak.zip(
+            {
+                "energy": jets["t"],
+                "px": jets["x"],
+                "py": jets["y"],
+                "pz": jets["z"],
+            }
+        )
+    )
+    constituent_indices = ak.Array(cluster.constituent_index(min_pt=min_pt))
+    njets = np.sum(ak.num(jets))
+    print(f"Clustered {njets} jets with R={deltar}")
+    return jets, constituent_indices
+
+
+def get_jet_basic_properties(
+    jet_p4: ak.Array,
+    jet_assigned_particles: ak.Array,
+    counts_per_jet: ak.Array,
+):
+    """Compute basic jet-level properties from clustered jet p4s and their constituents."""
     jet_data = ak.zip(
         {
             "jet_pt": jet_p4.pt,
             "jet_eta": jet_p4.eta,
             "jet_phi": jet_p4.phi,
             "jet_energy": jet_p4.energy,
-            "jet_mass": events["Jets.mass"],
-            "jet_sdmass": jvc.calculate_sdmass(jet_assigned_particles),
-            "jet_tau1": jvc.calculate_tau_n(
+            "jet_mass": jet_p4.mass,
+            "jet_sdmass": jvc.calculate_sdmass_ee(jet_assigned_particles),
+            "jet_tau1": jvc.calculate_tau_n_ee(
                 jet_assigned_particles.part_pt,
                 jet_assigned_particles.part_eta,
                 jet_assigned_particles.part_phi,
                 Naxes=1,
             ),
-            "jet_tau2": jvc.calculate_tau_n(
+            "jet_tau2": jvc.calculate_tau_n_ee(
                 jet_assigned_particles.part_pt,
                 jet_assigned_particles.part_eta,
                 jet_assigned_particles.part_phi,
                 Naxes=2,
             ),
-            "jet_tau3": jvc.calculate_tau_n(
+            "jet_tau3": jvc.calculate_tau_n_ee(
                 jet_assigned_particles.part_pt,
                 jet_assigned_particles.part_eta,
                 jet_assigned_particles.part_phi,
                 Naxes=3,
             ),
-            "jet_tau4": jvc.calculate_tau_n(
+            "jet_tau4": jvc.calculate_tau_n_ee(
                 jet_assigned_particles.part_pt,
                 jet_assigned_particles.part_eta,
                 jet_assigned_particles.part_phi,
                 Naxes=4,
             ),
         }
-    )  # TODO For the last 5 variables need to define a calculator function.
+    )
 
-    jet_constituent_p4_sums = ak.sum(jet_assigned_particles.part_p4, axis=-1)
+    sum_px = ak.sum(jet_assigned_particles.part_px, axis=-1)
+    sum_py = ak.sum(jet_assigned_particles.part_py, axis=-1)
+    sum_pz = ak.sum(jet_assigned_particles.part_pz, axis=-1)
+    sum_e = ak.sum(jet_assigned_particles.part_energy, axis=-1)
+    sum_m2 = sum_e**2 - sum_px**2 - sum_py**2 - sum_pz**2
+    sum_mass = np.sqrt(np.maximum(sum_m2, 0.0))
+    jet_constituent_p4_sums = vector.awk(
+        ak.zip(
+            {
+                "px": sum_px,
+                "py": sum_py,
+                "pz": sum_pz,
+                "mass": sum_mass,
+            }
+        )
+    )
     constituent_data = ak.zip(
         {
             "jet_mass_from_p4s": jet_constituent_p4_sums.mass,
@@ -314,137 +351,155 @@ def get_jet_basic_properties(
     return jet_data
 
 
-def assign_particles_to_jets_by_angle(
-    particle_data: ak.Array, jet_data: ak.Array, max_dR: float = 0.8
-) -> tuple:
-    """Assign every RecoParticle to its nearest jet by ΔR, up to max_dR.
-
-    Particles with ΔR > max_dR to any jet are dropped.
-    Returns (jet_assigned_particles [events, jets, parts], counts_per_jet [events, jets]).
-    """
-    # Pairwise ΔR² between every particle and every jet: [events, n_parts, n_jets]
-    pairs = ak.cartesian(
-        [
-            ak.zip({"eta": particle_data.part_eta, "phi": particle_data.part_phi}),
-            ak.zip({"eta": jet_data.jet_eta, "phi": jet_data.jet_phi}),
-        ],
-        axis=1,
-        nested=True,
-    )
-    deta = pairs["0"]["eta"] - pairs["1"]["eta"]
-    dphi_raw = pairs["0"]["phi"] - pairs["1"]["phi"]
-    dphi = np.arctan2(np.sin(dphi_raw), np.cos(dphi_raw))
-    dR2 = deta**2 + dphi**2
-
-    # Nearest jet per particle: [events, n_parts]
-    nearest_jet_idx = ak.argmin(dR2, axis=-1)
-    dR2_min = ak.min(dR2, axis=-1)
-
-    # Drop particles that are too far from any jet
-    max_dR2 = max_dR**2
-    within_cut = dR2_min <= max_dR2
-    nearest_jet_idx = nearest_jet_idx[within_cut]
-    particle_data = particle_data[within_cut]
-
-    # Count particles per jet using global bincount
-    n_jets = ak.to_numpy(ak.num(jet_data.jet_eta))
-    n_parts = ak.to_numpy(ak.num(nearest_jet_idx))
-    event_idx = np.repeat(np.arange(len(n_jets)), n_parts)
-    jet_offset = np.concatenate([[0], np.cumsum(n_jets)[:-1]])
-    global_jet_idx = ak.to_numpy(ak.flatten(nearest_jet_idx)) + jet_offset[event_idx]
-    counts_flat = np.bincount(global_jet_idx, minlength=int(np.sum(n_jets)))
-    counts_per_jet = ak.unflatten(counts_flat, n_jets)
-
-    # Sort particles by jet assignment, then unflatten into [events, jets, parts]
-    sort_order = ak.argsort(nearest_jet_idx, axis=1)
-    sorted_particles = particle_data[sort_order]
-    flat_particles = ak.flatten(sorted_particles)
-    jet_wise = ak.unflatten(flat_particles, counts_flat)
-    jet_assigned_particles = ak.unflatten(jet_wise, n_jets)
-
-    return jet_assigned_particles, counts_per_jet
-
-
 def get_all_properties(
     jet_data: ak.Array,
     jet_assigned_particles: ak.Array,
 ):
-    all_properties = ak.Array(
-        {
-            "part_ptrel": jet_assigned_particles.part_pt / jet_data.jet_pt,
-            "part_erel": jet_assigned_particles.part_energy / jet_data.jet_energy,
-            "part_signed_deta": f.signedDeltaEta(
-                jet_assigned_particles.part_eta, jet_data.jet_eta
-            ),
-            "part_signed_dphi": f.signedDeltaPhi(
-                jet_assigned_particles.part_phi, jet_data.jet_phi
-            ),
-            "part_deltaR": f.deltaR_etaPhi(
-                jet_assigned_particles.part_eta,
-                jet_assigned_particles.part_phi,
-                jet_data.jet_eta,
-                jet_data.jet_phi,
-            ),
-            "part_deta": f.deltaEta(jet_assigned_particles.part_eta, jet_data.jet_eta),
-            "part_dphi": f.deltaPhi(jet_assigned_particles.part_phi, jet_data.jet_phi),
-            **{field: jet_data[field] for field in jet_data.fields},
-            **{
-                field: jet_assigned_particles[field]
-                for field in jet_assigned_particles.fields
-                if field != "part_p4"
-            },
-        }
-    )
-    padded = ak.pad_none(all_properties, 1, axis=-1)
-    filled = ak.fill_none(padded, -999.9)
-    jet_based_dataset = ak.Array(
-        {field: ak.flatten(filled[field], axis=1) for field in filled.fields}
-    )
-    return jet_based_dataset
+    """Combine jet and particle properties at [events, jets, ...] level.
+
+    Pads the particle axis (axis=-1) but does NOT flatten the jet axis.
+    The caller is responsible for the final axis=1 flatten.
+    """
+    # Build combined dict with all fields at [events, jets, ...]
+    combined = {
+        # Jet-level fields: [events, jets]
+        **{k: jet_data[k] for k in jet_data.fields},
+        # Particle-relative-to-jet variables: [events, jets, particles]
+        "part_ptrel": jet_assigned_particles.part_pt / jet_data.jet_pt,
+        "part_erel": jet_assigned_particles.part_energy / jet_data.jet_energy,
+        "part_etarel": f.signedDeltaEta(
+            jet_assigned_particles.part_eta, jet_data.jet_eta
+        ),  # part_signed_deta ; to have same field names as in the JetClass dataset
+        "part_phirel": f.signedDeltaPhi(
+            jet_assigned_particles.part_phi, jet_data.jet_phi
+        ),  # part_signed_dphi ; to have same field names as in the JetClass dataset
+        "part_deltaR": f.deltaR_etaPhi(
+            jet_assigned_particles.part_eta,
+            jet_assigned_particles.part_phi,
+            jet_data.jet_eta,
+            jet_data.jet_phi,
+        ),
+        "part_deta": f.deltaEta(jet_assigned_particles.part_eta, jet_data.jet_eta),
+        "part_dphi": f.deltaPhi(jet_assigned_particles.part_phi, jet_data.jet_phi),
+        # Particle identity fields: [events, jets, particles]
+        **{
+            field: jet_assigned_particles[field]
+            for field in jet_assigned_particles.fields
+            if field != "part_p4"
+        },
+    }
+
+    # Pad the particle axis only (jet axis is always >= 1)
+    for k in combined:
+        arr = combined[k]
+        if arr.ndim == 3:
+            arr = ak.fill_none(ak.pad_none(arr, 1, axis=-1), -999.9)
+        combined[k] = arr
+
+    return combined
 
 
 def construct_jet_based_dataset(events: ak.Array):
+    """Cluster particles to jets with fastjet (R=0.8) and build the combined dict at [events, jets, ...] level.
+
+    Returns:
+        Tuple of (jet_data_dict, particle_data):
+        - jet_data_dict: [events, jets, ...] combined jet + particle properties
+        - particle_data: [events, particles] full particle data for event-level computations
+    """
     particle_data = get_cand_info(events=events)
 
-    # Build minimal jet 4-vector for ΔR particle-to-jet assignment
-    jet_p4 = vector.awk(
-        ak.zip(
-            {
-                "energy": events["Jets.energy"],
-                "px": events["Jets.momentum.x"],
-                "py": events["Jets.momentum.y"],
-                "pz": events["Jets.momentum.z"],
-            }
-        )
+    # Cluster particles into jets using fastjet
+    jet_p4, constituent_indices = cluster_particles_to_jets(
+        particle_data, deltar=0.8, min_pt=0.0
     )
-    jet_assigned_particles, counts_per_jet = assign_particles_to_jets_by_angle(
-        particle_data,
-        ak.zip({"jet_eta": jet_p4.eta, "jet_phi": jet_p4.phi}),
+
+    # Group particle data per jet using cluster constituent indices
+    # constituent_indices: [events, jets, particles_per_jet]
+    num_ptcls_per_jet = ak.num(constituent_indices, axis=-1)  # [events, jets]
+
+    # Flatten innermost axis to index into particle_data: [events, total_parts]
+    flat_indices = ak.flatten(constituent_indices, axis=-1)
+    selected_particles_flat = particle_data[flat_indices]
+
+    # Per-event unflatten back to [events, jets, particles_per_jet]
+    # (matches the pattern in get_jet_constituent_property)
+    jet_assigned_particles = ak.from_iter(
+        [
+            ak.unflatten(selected_particles_flat[i], num_ptcls_per_jet[i], axis=-1)
+            for i in range(len(num_ptcls_per_jet))
+        ]
     )
 
     jet_data = get_jet_basic_properties(
-        events=events,
-        jet_assigned_particles=jet_assigned_particles,
-        counts_per_jet=counts_per_jet,
         jet_p4=jet_p4,
+        jet_assigned_particles=jet_assigned_particles,
+        counts_per_jet=num_ptcls_per_jet,
     )
     all_properties = get_all_properties(
         jet_data=jet_data,
         jet_assigned_particles=jet_assigned_particles,
     )
-    return all_properties
+
+    return all_properties, particle_data
 
 
-def ntupelize_file(input_path: str, output_path: str):
+def ntupelize_file(
+    input_path: str, output_path: str, jet_level: bool = False, event_level: bool = True
+):
     events = load_file_contents(path=input_path, tree_name="events")
-    events = events[ak.num(events["Jets.energy"]) > 0]
-    dataset = construct_jet_based_dataset(events)
-    bad_particle = (
-        (dataset.part_pt <= 0)
-        | (dataset.part_pt == -999.9)
-        | (~np.isfinite(dataset.part_pt))
-    )
-    jet_contains_bad_particle = ak.any(bad_particle, axis=-1)
-    valid_jets = (dataset.jet_pt > 0) & np.isfinite(dataset.jet_eta)
-    dataset = dataset[(~jet_contains_bad_particle) * valid_jets]
-    ak.to_parquet(dataset, output_path, row_group_size=1024)
+    combined_jet, particle_data = construct_jet_based_dataset(events)
+
+    # Flatten from [events, jets, ...] to [total_jets, ...] at the very end
+    if jet_level:
+        jet_dataset = ak.Array(
+            {k: ak.flatten(v, axis=1) for k, v in combined_jet.items()}
+        )
+        bad_particle = (
+            (jet_dataset.part_pt <= 0)
+            | (jet_dataset.part_energy >= 45.6)
+            | (jet_dataset.part_pt == -999.9)
+            | (~np.isfinite(jet_dataset.part_pt))
+        )
+        jet_contains_bad_particle = ak.any(bad_particle, axis=-1)
+        valid_jets = (
+            (jet_dataset.jet_pt > 0)
+            & np.isfinite(jet_dataset.jet_eta)
+            & (jet_dataset.jet_energy <= 91.2)
+        )
+        jet_dataset = jet_dataset[(~jet_contains_bad_particle) * valid_jets]
+        ak.to_parquet(jet_dataset, output_path, row_group_size=1024)
+    if event_level:
+        # Merge jet-level [events, jets, ...] with event-level [events] fields
+        bad_particle = (
+            (particle_data.part_pt <= 0)
+            | (particle_data.part_energy >= 45.6)
+            | (particle_data.part_pt == -999.9)
+            | (~np.isfinite(particle_data.part_pt))
+        )
+        event_contains_bad_particle = ak.any(bad_particle, axis=-1)
+        bad_jets = (
+            (combined_jet.jet_pt < 0)
+            | ~np.isfinite(combined_jet.jet_eta)
+            | (combined_jet.jet_energy > 91.2)
+        )
+        event_contains_bad_jet = ak.any(bad_jets, axis=-1)
+        event_mask_ = ak.num(combined_jet.jet_pt) > 0
+        event_mask = (
+            (~event_contains_bad_particle) & (~event_contains_bad_jet) & event_mask_
+        )
+        particle_data = particle_data[event_mask]
+        combined_jet = combined_jet[event_mask]
+        # Compute event-level variables from particle data and jet variables
+        event_dataset = evc.get_event_variables(
+            particle_data=particle_data, jet_data=combined_jet
+        )
+        final_dataset = ak.zip(
+            {
+                **{f: event_dataset[f] for f in event_dataset.fields},
+                **{f: combined_jet[f] for f in combined_jet.fields},
+                **{f: particle_data[f] for f in particle_data.fields},
+            },
+            depth_limit=1,
+        )
+        ak.to_parquet(final_dataset, output_path, row_group_size=1024)

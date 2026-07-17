@@ -16,4 +16,4 @@ cd {{ working_dir }}
 
 # Run the batch processing script
 
-{{ environment_script }} python3 {{ processing_script }} +input_paths='[{{ input_paths }}]' +output_paths='[{{ output_paths }}']
+{{ environment_script }} python3 {{ processing_script }} +input_paths='[{{ input_paths }}]' +output_paths='[{{ output_paths }}]' +output_level={{ output_level }}
