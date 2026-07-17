@@ -1,6 +1,6 @@
-import vector
-import numpy as np
 import awkward as ak
+import numpy as np
+import vector
 from particle import pdgid
 
 from ntupelizer.tools import general as g
@@ -196,3 +196,88 @@ class GenTauInfoMatcher:
                 dummy_value=dummy_value,
             )
         return gen_jet_tau_info
+
+
+class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
+    """Extends GenTauInfoMatcher with per-visible-daughter p4, PDG, and charge.
+
+    Adds three extra jagged properties per gen jet (shape [n_events, n_jets, var]):
+      - gen_jet_tau_vis_daughter_p4s    : ak.zip({pt, eta, phi, energy})
+      - gen_jet_tau_vis_daughter_pdgs   : raw PDG int
+      - gen_jet_tau_vis_daughter_charges: float charge
+    """
+
+    def __init__(self, arrays, gen_jets, idx_map_branch="idx_mc", debug=False):
+        super().__init__(
+            arrays=arrays,
+            gen_jets=gen_jets,
+            idx_map_branch=idx_map_branch,
+            debug=debug,
+        )
+        self.properties += [
+            "tau_vis_daughter_p4s",
+            "tau_vis_daughter_pdgs",
+            "tau_vis_daughter_charges",
+        ]
+        self.fill_values.update(
+            {
+                "tau_vis_daughter_p4s": [],
+                "tau_vis_daughter_pdgs": [],
+                "tau_vis_daughter_charges": [],
+            }
+        )
+
+    def retrieve_tau_info_from_daughters(
+        self, tau_daughters, n_taus, event, event_particle_p4s
+    ):
+        # Get the parent dict (decaymode, tau_p4, tau_daughter_PDG, tau_vis_energy)
+        tau_info = super().retrieve_tau_info_from_daughters(
+            tau_daughters, n_taus, event, event_particle_p4s
+        )
+
+        # Now collect per-visible-daughter p4s, raw PDGs, and charges
+        all_daughter_p4s = []
+        all_daughter_pdgs = []
+        all_daughter_charges = []
+
+        for tau_idx in range(n_taus):
+            pt_list = []
+            eta_list = []
+            phi_list = []
+            energy_list = []
+            pdg_list = []
+            charge_list = []
+
+            for di in tau_daughters[tau_idx]:
+                pdg_val = int(event["MCParticles.PDG"][di])
+                if abs(pdg_val) in [12, 14, 16]:
+                    continue
+                d_p4 = event_particle_p4s[di]
+                pt_list.append(float(d_p4.pt))
+                eta_list.append(float(d_p4.eta))
+                phi_list.append(float(d_p4.phi))
+                energy_list.append(float(d_p4.energy))
+                pdg_list.append(pdg_val)
+                charge_list.append(float(pdgid.charge(pdg_val)))
+
+            if len(pt_list) > 0:
+                daughter_p4s = ak.zip(
+                    {
+                        "pt": pt_list,
+                        "eta": eta_list,
+                        "phi": phi_list,
+                        "energy": energy_list,
+                    }
+                )
+            else:
+                daughter_p4s = ak.Array([])
+
+            all_daughter_p4s.append(daughter_p4s)
+            all_daughter_pdgs.append(pdg_list)
+            all_daughter_charges.append(charge_list)
+
+        tau_info["tau_vis_daughter_p4s"] = ak.Array(all_daughter_p4s)
+        tau_info["tau_vis_daughter_pdgs"] = ak.Array(all_daughter_pdgs)
+        tau_info["tau_vis_daughter_charges"] = ak.Array(all_daughter_charges)
+
+        return tau_info
