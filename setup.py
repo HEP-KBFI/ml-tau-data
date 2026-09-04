@@ -5,8 +5,6 @@ from setuptools import setup, find_packages
 # Core dependencies for running the workflow orchestration
 # (minimal set needed for law/luigi scheduling)
 CORE_DEPS = [
-    "law",
-    "luigi",
     "jinja2",
     "omegaconf",
     "snakemake>=7,<8",

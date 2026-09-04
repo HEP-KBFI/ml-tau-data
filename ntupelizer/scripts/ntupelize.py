@@ -17,6 +17,10 @@ os.environ["MKL_NUM_THREADS"] = "1"
 def main(cfg: DictConfig) -> None:
     ntupelizer_cls = getattr(nt, cfg.ntupelizer_class)
     processor = ntupelizer_cls(cfg)
+    # Ensure the output directory exists before PyArrow tries to open the file.
+    # The Snakemake shell creates it on the host, but Apptainer may not bind
+    # the parent directory, so we create it here as well (exist_ok is safe).
+    os.makedirs(os.path.dirname(cfg.output_path), exist_ok=True)
     if not os.path.exists(cfg.output_path):
         start_time = time.time()
         processor.ntupelize(

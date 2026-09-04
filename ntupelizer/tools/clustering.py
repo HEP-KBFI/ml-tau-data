@@ -1,7 +1,8 @@
-import vector
+import awkward as ak
 import fastjet
 import numpy as np
-import awkward as ak
+import vector
+
 from ntupelizer.tools import general as g
 
 
@@ -85,7 +86,7 @@ class GenJetClusterer(JetClusterer):
         for gj_pdg in gen_jet_pdgs:
             sub_mask = []
             for gjp in gj_pdg:
-                if (15 in np.abs(gjp)) or (13 in np.abs(gjp)):
+                if (11 in np.abs(gjp)) or (13 in np.abs(gjp)):
                     sub_mask.append(False)
                 else:
                     sub_mask.append(True)

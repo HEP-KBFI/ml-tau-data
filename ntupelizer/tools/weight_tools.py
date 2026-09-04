@@ -1,21 +1,21 @@
-import os
 import glob
+import multiprocessing
+import os
+from itertools import repeat
+
+import awkward as ak
+import general as g
 import hydra
 import matplotlib
-import numpy as np
-import mplhep as hep
-import awkward as ak
-import seaborn as sns
-import multiprocessing
 import matplotlib as mpl
-from itertools import repeat
 import matplotlib.pyplot as plt
-from omegaconf import DictConfig
+import mplhep as hep
+import numpy as np
+import seaborn as sns
 from general import load_all_data
 from matplotlib import ticker
 from matplotlib.ticker import AutoLocator
-
-import general as g
+from omegaconf import DictConfig
 
 hep.style.use(hep.styles.CMS)
 matplotlib.use("Agg")
@@ -135,7 +135,12 @@ def process_single_file(input_path, weight_matrix, theta_bin_edges, p_bin_edges,
         merged_info = {field: data[field] for field in data.fields}
         merged_info.update({"weight": weights})
         print(f"Adding weights to {input_path}")
-        ak.to_parquet(ak.Record(merged_info), input_path)
+        ak.to_parquet(
+            ak.Array(merged_info),
+            input_path,
+            compression="zstd",
+            compression_level=6,
+        )
     return weights
 
 

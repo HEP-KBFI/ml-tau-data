@@ -47,8 +47,12 @@ class GenTauInfoMatcher:
             "tau_vis_energy": 0,
             "tau_decaymode": -1,
             "tau_charge": -999,
-            "tau_full_p4": g.DUMMY_P4_VECTOR,
-            "tau_p4": g.DUMMY_P4_VECTOR,  # This is the visible p4
+            # Use the {pt, eta, phi, energy} dummy so that the type matches the
+            # real tau p4s (which go through reinitialize_p4).  Using
+            # DUMMY_P4_VECTOR ({mass, x, y, z}) would create a type union in
+            # the awkward array, which parquet cannot serialise.
+            "tau_full_p4": g.DUMMY_P4_PTETA,
+            "tau_p4": g.DUMMY_P4_PTETA,  # This is the visible p4
             "tau_DV_x": -1,
             "tau_DV_y": -1,
             "tau_DV_z": -1,
@@ -101,10 +105,11 @@ class GenTauInfoMatcher:
         tau_vis_p4s = []
         daughter_pdgs = []
         for tau_idx in range(n_taus):
-            daughter_pdgs = [
+            # Use a different name so the outer `daughter_pdgs` accumulator is not shadowed
+            raw_daughter_pdgs = [
                 event["MCParticles.PDG"][d_idx] for d_idx in tau_daughters[tau_idx]
             ]
-            pdgs = [self.map_pdgid_to_candid(pdg_id) for pdg_id in daughter_pdgs]
+            pdgs = [self.map_pdgid_to_candid(pdg_id) for pdg_id in raw_daughter_pdgs]
             tau_vis_p4 = g.DUMMY_P4_VECTOR
             for tc in tau_daughters[tau_idx]:
                 daughter_p4 = event_particle_p4s[tc]
@@ -135,9 +140,11 @@ class GenTauInfoMatcher:
         tau_general_info["tau_DV_z"] = [
             event["MCParticles.endpoint.z"][tau_idx] for tau_idx in tau_indices
         ]
-        tau_general_info["tau_full_p4"] = [
-            event_particle_p4s[tau_idx] for tau_idx in tau_indices
-        ]
+        full_p4_list = [event_particle_p4s[tau_idx] for tau_idx in tau_indices]
+        if len(full_p4_list) > 0:
+            tau_general_info["tau_full_p4"] = g.reinitialize_p4(ak.Array(full_p4_list))
+        else:
+            tau_general_info["tau_full_p4"] = ak.Array(full_p4_list)
         tau_general_info["tau_charge"] = [
             pdgid.charge(event["MCParticles.PDG"][tau_idx]) for tau_idx in tau_indices
         ]
@@ -221,9 +228,11 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
         ]
         self.fill_values.update(
             {
-                "tau_vis_daughter_p4s": [],
-                "tau_vis_daughter_pdgs": [],
-                "tau_vis_daughter_charges": [],
+                "tau_vis_daughter_p4s": ak.Array(
+                    [{"pt": 0.0, "eta": 0.0, "phi": 0.0, "energy": 0.0}]
+                )[:0],
+                "tau_vis_daughter_pdgs": ak.Array([0])[:0],
+                "tau_vis_daughter_charges": ak.Array([0.0])[:0],
             }
         )
 
@@ -269,12 +278,21 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
                         "energy": energy_list,
                     }
                 )
+                daughter_pdgs = ak.Array(pdg_list)
+                daughter_charges = ak.Array(charge_list)
             else:
-                daughter_p4s = ak.Array([])
+                # Keep the daughter collections typed even when empty, so that
+                # downstream code reading e.g. daughter_p4["pt"] works on an empty
+                # list instead of hitting an `unknown`-type array with no fields.
+                daughter_p4s = ak.Array(
+                    [{"pt": 0.0, "eta": 0.0, "phi": 0.0, "energy": 0.0}]
+                )[:0]
+                daughter_pdgs = ak.Array([0])[:0]
+                daughter_charges = ak.Array([0.0])[:0]
 
             all_daughter_p4s.append(daughter_p4s)
-            all_daughter_pdgs.append(pdg_list)
-            all_daughter_charges.append(charge_list)
+            all_daughter_pdgs.append(daughter_pdgs)
+            all_daughter_charges.append(daughter_charges)
 
         tau_info["tau_vis_daughter_p4s"] = ak.Array(all_daughter_p4s)
         tau_info["tau_vis_daughter_pdgs"] = ak.Array(all_daughter_pdgs)
