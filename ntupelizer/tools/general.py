@@ -1,10 +1,10 @@
-import os
 import glob
-import vector
-import numpy as np
+import os
+
 import awkward as ak
 import boost_histogram as bh
-
+import numpy as np
+import vector
 
 DUMMY_P4_VECTOR = vector.awk(
     ak.zip(
@@ -15,6 +15,19 @@ DUMMY_P4_VECTOR = vector.awk(
             "z": [0.0],
         }
     )
+)[0]
+
+# Canonical zero p4 in the standardised {pt, eta, phi, energy} schema.
+# Use this as the fill/dummy value wherever p4s are stored in that format
+# (i.e. after reinitialize_p4), so that the type stays consistent when
+# mixing matched and unmatched jets in an awkward array.
+DUMMY_P4_PTETA = ak.zip(
+    {
+        "pt": [0.0],
+        "eta": [0.0],
+        "phi": [0.0],
+        "energy": [0.0],
+    }
 )[0]
 
 

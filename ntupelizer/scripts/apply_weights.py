@@ -4,6 +4,9 @@ Reads the weight matrices and bin edges produced by compute_weights.py from
 --weights-dir, looks up the per-event weight for each jet based on its
 (theta, p) bin, and writes weighted output parquet files to --output-dir.
 
+The weight is applied by streaming the input via pyarrow row groups, so the
+full split is never held in memory and the schema stays stable.
+
 Usage:
     apply_weights.py -i <signal> -b <background> -w <weights_dir> -o <output_dir> [-p]
 
@@ -20,26 +23,73 @@ Options:
 
 import os
 import sys
-import numpy as np
+from pathlib import Path
+
 import awkward as ak
 import matplotlib.pyplot as plt
-from pathlib import Path
+import numpy as np
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
 from docopt import docopt
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import weight_tools as wt
 
 
+def _gen_jet_theta_p(p4_struct):
+    """Return (theta_deg, p) arrays from a gen_jet_p4 struct column/array."""
+    pt = pc.struct_field(p4_struct, "pt").to_numpy()
+    eta = pc.struct_field(p4_struct, "eta").to_numpy()
+    theta = np.degrees(2.0 * np.arctan(np.exp(-eta)))
+    p = pt * np.cosh(eta)
+    return theta, p
+
+
+def _compute_weights_from_struct(p4_struct, weight_matrix, theta_edges, p_edges):
+    """Compute per-jet weights from a gen_jet_p4 struct column (pyarrow-native)."""
+    theta, p = _gen_jet_theta_p(p4_struct)
+    n_theta, n_p = weight_matrix.shape
+    theta_centers = (theta_edges[1:] + theta_edges[:-1]) / 2
+    p_centers = (p_edges[1:] + p_edges[:-1]) / 2
+    theta_bin = np.clip(np.digitize(theta, theta_centers) - 1, 0, n_theta - 1)
+    p_bin = np.clip(np.digitize(p, p_centers) - 1, 0, n_p - 1)
+    return weight_matrix[theta_bin, p_bin]
+
+
 def apply_and_save(input_path, weight_matrix, theta_edges, pt_edges, output_dir):
-    data = ak.from_parquet(input_path)
-    weights = wt.get_weights(data, weight_matrix, theta_edges, pt_edges)
     output_path = os.path.join(output_dir, Path(input_path).name)
-    out = ak.Array(
-        {**{field: data[field] for field in data.fields}, "cls_weight": weights}
+
+    pf = pq.ParquetFile(input_path)
+    schema = pa.schema([f.with_metadata(None) for f in pf.schema_arrow], metadata=None)
+    out_schema = schema.append(pa.field("cls_weight", pa.float64()))
+
+    writer = pq.ParquetWriter(
+        output_path,
+        out_schema,
+        compression="zstd",
+        compression_level=6,
+        use_byte_stream_split=True,
     )
-    ak.to_parquet(out, output_path, row_group_size=1024)
-    print(f"Wrote {len(data)} events with weights → {output_path}")
-    return weights, data
+    all_weights = []
+    n_total = 0
+    try:
+        for batch in pf.iter_batches(batch_size=1024):
+            table = pa.Table.from_batches([batch])
+            weights = _compute_weights_from_struct(
+                table.column("gen_jet_p4"), weight_matrix, theta_edges, pt_edges
+            )
+            table = table.append_column("cls_weight", pa.array(weights))
+            writer.write_table(table, row_group_size=1024)
+            all_weights.append(weights)
+            n_total += table.num_rows
+            del table
+    finally:
+        writer.close()
+
+    all_weights = np.concatenate(all_weights) if all_weights else np.array([])
+    print(f"Wrote {n_total} events with weights → {output_path}")
+    return all_weights
 
 
 if __name__ == "__main__":
@@ -59,11 +109,11 @@ if __name__ == "__main__":
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── apply weights and save ────────────────────────────────────────────────
-    sig_weights, sig_data = apply_and_save(
+    # ── apply weights and save (streamed) ─────────────────────────────────────
+    sig_weights = apply_and_save(
         sig_path, sig_weight_matrix, theta_edges, pt_edges, output_dir
     )
-    bkg_weights, bkg_data = apply_and_save(
+    bkg_weights = apply_and_save(
         bkg_path, bkg_weight_matrix, theta_edges, pt_edges, output_dir
     )
 
@@ -74,13 +124,15 @@ if __name__ == "__main__":
         wt.plot_weight_distributions(sig_weights, bkg_weights, validation_dir)
         print("Saved weight distribution plot.")
 
-        # ── dxy / dz error overlay plots ──────────────────────────────────────
+        # ── dxy / dz error overlay plots (only load the two needed columns) ──
         INVALID = -1000.0
         error_vars = {
             "reco_cand_dxy_error": "PFCandidate dxy error [mm]",
             "reco_cand_dz_error": "PFCandidate dz error [mm]",
         }
         log_bins = np.logspace(-4, 0, 80)
+        sig_data = ak.from_parquet(sig_path, columns=list(error_vars.keys()))
+        bkg_data = ak.from_parquet(bkg_path, columns=list(error_vars.keys()))
         for var, xlabel in error_vars.items():
             if var not in sig_data.fields:
                 continue

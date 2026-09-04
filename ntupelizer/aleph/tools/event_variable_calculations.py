@@ -191,7 +191,7 @@ def compute_particle_counts(particle_data: ak.Array) -> ak.Array:
 
 def compute_jettiness(jet_data: ak.Array) -> ak.Array:
     """Compute jettiness for each event."""
-    TODO: Maybe worth implementing also this?
+    # TODO: Maybe worth implementing also this?
     pass
 
 

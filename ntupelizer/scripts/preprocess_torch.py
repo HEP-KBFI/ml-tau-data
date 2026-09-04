@@ -9,18 +9,19 @@ Re-run whenever build_tensors logic changes (new features, normalization, etc.).
 The output .pt files live alongside the parquet files with the same stem.
 """
 
-import os
-import glob
 import argparse
+import glob
 import multiprocessing as mp
+import os
 import time
-from tqdm import tqdm
-import torch
-import numpy as np
-import awkward as ak
 
-from ntupelizer.tools import general as g
+import awkward as ak
+import numpy as np
+import torch
+from tqdm import tqdm
+
 from ntupelizer.tools import features as f
+from ntupelizer.tools import general as g
 from ntupelizer.tools.tau_decaymode import get_reduced_decaymodes
 
 # Reduced decay mode → class index (0-5) for 6-class one-hot encoding
@@ -319,7 +320,9 @@ def preprocess_file(
             completed_batches = 0
             completed_rgs = 0
             last_completed_time = t0
-            iterator = pool.imap_unordered(_process_row_group_batch, args_list, chunksize=1)
+            iterator = pool.imap_unordered(
+                _process_row_group_batch, args_list, chunksize=1
+            )
             with tqdm(total=num_batches, desc=desc, unit="batch") as pbar:
                 while completed_batches < num_batches:
                     try:
@@ -331,7 +334,7 @@ def preprocess_file(
                         print(
                             f"  heartbeat: {completed_batches}/{num_batches} batches done "
                             f"({completed_rgs}/{num_row_groups} rgs); "
-                            f"no completion for {stalled_for:.1f}s; elapsed {elapsed/60.0:.1f} min"
+                            f"no completion for {stalled_for:.1f}s; elapsed {elapsed / 60.0:.1f} min"
                         )
                         continue
 
@@ -339,7 +342,9 @@ def preprocess_file(
                     batch_duration = now - last_completed_time
                     last_completed_time = now
                     completed_batches += 1
-                    completed_rgs = min(completed_batches * rg_batch_size, num_row_groups)
+                    completed_rgs = min(
+                        completed_batches * rg_batch_size, num_row_groups
+                    )
                     per_batch_seconds.append(batch_duration)
 
                     tensor_tuple = _to_tensor(r)
@@ -370,9 +375,13 @@ def preprocess_file(
         per_batch_seconds = []
         completed_rgs = 0
         with tqdm(total=num_batches, desc=desc, unit="batch") as pbar:
-            for batch_idx, (parquet_path_i, rg_indices, max_cands_i) in enumerate(args_list):
+            for batch_idx, (parquet_path_i, rg_indices, max_cands_i) in enumerate(
+                args_list
+            ):
                 batch_start = time.monotonic()
-                last_rg_idx, raw = _process_row_group_batch((parquet_path_i, rg_indices, max_cands_i))
+                last_rg_idx, raw = _process_row_group_batch(
+                    (parquet_path_i, rg_indices, max_cands_i)
+                )
                 tensor_tuple = _to_tensor(raw)
                 all_tensors.append(tensor_tuple)
                 pbar.update(1)
@@ -467,7 +476,7 @@ def main():
         type=int,
         default=32,
         help="Number of row groups to read per worker task (default: 32). "
-             "Higher values reduce seek overhead on files with many small row groups.",
+        "Higher values reduce seek overhead on files with many small row groups.",
     )
     args = parser.parse_args()
 

@@ -447,4 +447,10 @@ def ntupelize_file(input_path: str, output_path: str):
     jet_contains_bad_particle = ak.any(bad_particle, axis=-1)
     valid_jets = (dataset.jet_pt > 0) & np.isfinite(dataset.jet_eta)
     dataset = dataset[(~jet_contains_bad_particle) * valid_jets]
-    ak.to_parquet(dataset, output_path, row_group_size=1024)
+    ak.to_parquet(
+        dataset,
+        output_path,
+        row_group_size=1024,
+        compression="zstd",
+        compression_level=6,
+    )

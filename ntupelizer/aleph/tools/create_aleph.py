@@ -441,7 +441,7 @@ def construct_jet_based_dataset(events: ak.Array):
         jet_assigned_particles=jet_assigned_particles,
     )
 
-    return all_properties, particle_data
+    return ak.Array(all_properties), particle_data
 
 
 def ntupelize_file(
@@ -468,7 +468,13 @@ def ntupelize_file(
             & (jet_dataset.jet_energy <= 91.2)
         )
         jet_dataset = jet_dataset[(~jet_contains_bad_particle) * valid_jets]
-        ak.to_parquet(jet_dataset, output_path, row_group_size=1024)
+        ak.to_parquet(
+            jet_dataset,
+            output_path,
+            row_group_size=1024,
+            compression="zstd",
+            compression_level=6,
+        )
     if event_level:
         # Merge jet-level [events, jets, ...] with event-level [events] fields
         bad_particle = (
@@ -502,4 +508,10 @@ def ntupelize_file(
             },
             depth_limit=1,
         )
-        ak.to_parquet(final_dataset, output_path, row_group_size=1024)
+        ak.to_parquet(
+            final_dataset,
+            output_path,
+            row_group_size=1024,
+            compression="zstd",
+            compression_level=6,
+        )
