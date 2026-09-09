@@ -290,6 +290,11 @@ def preprocess_file(
 
     metadata = ak.metadata_from_parquet(parquet_path)
     num_row_groups = metadata["num_row_groups"]
+    if metadata["num_rows"] == 0:
+        # An empty chunk (a split configured with no events) has no tensors to
+        # build; skipping keeps the rest of the conversion going.
+        print(f"  skip (no events): {parquet_path}")
+        return
 
     # Batch row groups so each worker reads N groups in a single ak.from_parquet call,
     # dramatically reducing per-task file-open / seek overhead on files with many small row groups.
@@ -436,7 +441,8 @@ def main():
         "-i",
         "--input-dir",
         required=True,
-        help="Directory containing *_train.parquet and *_test.parquet files.",
+        help="Directory containing the *_train*.parquet / *_test*.parquet files "
+        "(chunked, e.g. z_train_00000.parquet, or a single file per split).",
     )
     parser.add_argument(
         "--max-cands",
@@ -480,9 +486,11 @@ def main():
     )
     args = parser.parse_args()
 
+    # The trailing wildcard matches both a single-file split (z_train.parquet)
+    # and the chunked form written by merge_files.py (z_train_00000.parquet, ...).
     patterns = [
-        os.path.join(args.input_dir, "*_train.parquet"),
-        os.path.join(args.input_dir, "*_test.parquet"),
+        os.path.join(args.input_dir, "*_train*.parquet"),
+        os.path.join(args.input_dir, "*_test*.parquet"),
     ]
 
     all_files = []
@@ -493,7 +501,7 @@ def main():
         print(f"No parquet files found under {args.input_dir}")
         return
 
-    sorted_files = sorted(all_files)
+    sorted_files = sorted(all_files, key=g.natural_key)
     print(f"Found {len(sorted_files)} parquet files to process.")
     for i, path in enumerate(sorted_files, 1):
         print(f"[{i}/{len(sorted_files)}] {os.path.basename(path)}")

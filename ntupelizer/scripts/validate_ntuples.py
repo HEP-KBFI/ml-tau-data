@@ -12,8 +12,9 @@ Usage:
     validate_ntuples.py -s <signal_file> -b <bkg_file> -o <output_dir>
 
 Options:
-    -s <signal_file>   Weighted signal parquet (e.g. z_train.parquet).
-    -b <bkg_file>      Weighted background parquet (e.g. qq_train.parquet).
+    -s <signal_file>   Weighted signal parquet (e.g. z_train_00000.parquet). Loaded
+                       in full, so pass a single chunk rather than a whole split.
+    -b <bkg_file>      Weighted background parquet (e.g. qq_train_00000.parquet).
     -o <output_dir>    Directory where plots will be written.
 """
 
@@ -141,6 +142,37 @@ if __name__ == "__main__":
         ).figure.savefig(
             os.path.join(output_dir, "signal_decay_modes.pdf"), bbox_inches="tight"
         )
+
+    # ── weight distributions and impact-parameter error overlays ─────────────
+    # These used to be produced by apply_weights.py -p; the weights are now
+    # applied by the merge stage, so the plots live with the other validation.
+    wt.plot_weight_distributions(sig_weights, bkg_weights, output_dir)
+
+    INVALID = -1000.0
+    error_vars = {
+        "reco_cand_dxy_error": "PFCandidate dxy error [mm]",
+        "reco_cand_dz_error": "PFCandidate dz error [mm]",
+    }
+    error_bins = np.logspace(-4, 0, 80)
+    for var, xlabel in error_vars.items():
+        if var not in sig_data.fields:
+            continue
+        fig, ax = plt.subplots(figsize=(7, 5.5))
+        for data, label, color in [
+            (sig_data, "Signal", "red"),
+            (bkg_data, "Background", "blue"),
+        ]:
+            flat = ak.to_numpy(ak.flatten(data[var]))
+            flat = flat[flat > INVALID + 1]
+            counts, edges = np.histogram(flat, bins=error_bins, density=True)
+            ax.step(edges[:-1], counts, where="post", label=label, color=color)
+        ax.set_xscale("log")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Fraction [a.u.]")
+        ax.legend()
+        plt.tight_layout()
+        fig.savefig(os.path.join(output_dir, f"{var}.pdf"), bbox_inches="tight")
+        plt.close(fig)
 
     plt.close("all")
 

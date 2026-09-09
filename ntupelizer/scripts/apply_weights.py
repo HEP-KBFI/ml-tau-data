@@ -1,5 +1,9 @@
 """Apply pre-computed weight matrices to signal and background parquet files.
 
+Standalone utility, not part of the Snakemake workflow: there the weights are
+applied by merge_files.py in the same pass that writes the output chunks. Use
+this to re-weight an already written dataset without re-merging it.
+
 Reads the weight matrices and bin edges produced by compute_weights.py from
 --weights-dir, looks up the per-event weight for each jet based on its
 (theta, p) bin, and writes weighted output parquet files to --output-dir.
@@ -7,17 +11,27 @@ Reads the weight matrices and bin edges produced by compute_weights.py from
 The weight is applied by streaming the input via pyarrow row groups, so the
 full split is never held in memory and the schema stays stable.
 
+Inputs may be chunked: pointing -i/-b at a directory of
+<short>_<split>_<index>.parquet files weights every chunk of that split and
+writes one output file per input file, keeping the chunk filenames unchanged.
+
 Usage:
-    apply_weights.py -i <signal> -b <background> -w <weights_dir> -o <output_dir> [-p]
+    apply_weights.py -i <signal> -b <background> -w <weights_dir> -o <output_dir>
+                     [-t <split>] [--row-group-size <n>] [-p]
 
 Options:
-    -i <signal>         Path to the signal parquet file (e.g. z_train.parquet).
-    -b <background>     Path to the background parquet file (e.g. qq_train.parquet).
+    -i <signal>         Signal input: a single parquet file, or a directory of
+                        chunked files (e.g. z_train_00000.parquet, z_train_00001.parquet).
+    -b <background>     Background input, same two forms as -i.
     -w <weights_dir>    Directory containing sig_weights.npy, bkg_weights.npy,
                         pt_edges.npy and theta_edges.npy (produced by
                         compute_weights.py).
     -o <output_dir>     Directory for the output parquet files. Output filenames
                         match the input filenames.
+    -t <split>          Split to select when -i/-b are directories.
+                        [default: train]
+    --row-group-size <n>  Rows per parquet row group, and per streamed batch.
+                        [default: 1024]
     -p                  Produce a weight distribution plot. [default: False]
 """
 
@@ -34,6 +48,7 @@ import pyarrow.parquet as pq
 from docopt import docopt
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import general as g
 import weight_tools as wt
 
 
@@ -57,7 +72,9 @@ def _compute_weights_from_struct(p4_struct, weight_matrix, theta_edges, p_edges)
     return weight_matrix[theta_bin, p_bin]
 
 
-def apply_and_save(input_path, weight_matrix, theta_edges, pt_edges, output_dir):
+def apply_and_save(
+    input_path, weight_matrix, theta_edges, pt_edges, output_dir, row_group_size=1024
+):
     output_path = os.path.join(output_dir, Path(input_path).name)
 
     pf = pq.ParquetFile(input_path)
@@ -74,16 +91,22 @@ def apply_and_save(input_path, weight_matrix, theta_edges, pt_edges, output_dir)
     all_weights = []
     n_total = 0
     try:
-        for batch in pf.iter_batches(batch_size=1024):
+        # One row group in, one row group out: the batch size doubles as the
+        # output row group size, so the input row group layout is not inherited.
+        for batch in pf.iter_batches(batch_size=row_group_size):
             table = pa.Table.from_batches([batch])
             weights = _compute_weights_from_struct(
                 table.column("gen_jet_p4"), weight_matrix, theta_edges, pt_edges
             )
             table = table.append_column("cls_weight", pa.array(weights))
-            writer.write_table(table, row_group_size=1024)
+            writer.write_table(table, row_group_size=row_group_size)
             all_weights.append(weights)
             n_total += table.num_rows
             del table
+        if n_total == 0:
+            # An empty input still has to get an explicit empty row group:
+            # a parquet file with zero row groups cannot be read by awkward.
+            writer.write_table(out_schema.empty_table())
     finally:
         writer.close()
 
@@ -99,6 +122,8 @@ if __name__ == "__main__":
     bkg_path = args["-b"]
     weights_dir = args["-w"]
     output_dir = args["-o"]
+    split = args["-t"] or "train"
+    row_group_size = int(args["--row-group-size"] or 1024)
     produce_plots = args["-p"]
 
     # ── load weight matrices and bin edges ────────────────────────────────────
@@ -109,13 +134,25 @@ if __name__ == "__main__":
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── apply weights and save (streamed) ─────────────────────────────────────
-    sig_weights = apply_and_save(
-        sig_path, sig_weight_matrix, theta_edges, pt_edges, output_dir
-    )
-    bkg_weights = apply_and_save(
-        bkg_path, bkg_weight_matrix, theta_edges, pt_edges, output_dir
-    )
+    # ── resolve chunked inputs (directory) or a single file ───────────────────
+    sig_paths = g.split_chunk_paths(sig_path, split)
+    bkg_paths = g.split_chunk_paths(bkg_path, split)
+
+    # ── apply weights and save (streamed, one output file per input file) ─────
+    def _apply_all(paths, weight_matrix):
+        # Only the per-jet weights are kept in memory across chunks (one float
+        # per jet), which the optional plots below need; the jets themselves are
+        # streamed straight to disk.
+        per_file = [
+            apply_and_save(
+                p, weight_matrix, theta_edges, pt_edges, output_dir, row_group_size
+            )
+            for p in paths
+        ]
+        return np.concatenate(per_file) if per_file else np.array([])
+
+    sig_weights = _apply_all(sig_paths, sig_weight_matrix)
+    bkg_weights = _apply_all(bkg_paths, bkg_weight_matrix)
 
     # ── optional weight distribution plot ─────────────────────────────────────
     if produce_plots:
@@ -131,8 +168,10 @@ if __name__ == "__main__":
             "reco_cand_dz_error": "PFCandidate dz error [mm]",
         }
         log_bins = np.logspace(-4, 0, 80)
-        sig_data = ak.from_parquet(sig_path, columns=list(error_vars.keys()))
-        bkg_data = ak.from_parquet(bkg_path, columns=list(error_vars.keys()))
+        # A single chunk (O(100k) jets) is plenty for a shape comparison, so
+        # only the first one is read instead of the whole split.
+        sig_data = ak.from_parquet(sig_paths[0], columns=list(error_vars.keys()))
+        bkg_data = ak.from_parquet(bkg_paths[0], columns=list(error_vars.keys()))
         for var, xlabel in error_vars.items():
             if var not in sig_data.fields:
                 continue

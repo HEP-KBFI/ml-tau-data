@@ -444,9 +444,24 @@ def construct_jet_based_dataset(events: ak.Array):
     return ak.Array(all_properties), particle_data
 
 
-def ntupelize_file(
-    input_path: str, output_path: str, jet_level: bool = False, event_level: bool = True
-):
+def build_dataset(
+    input_path: str, jet_level: bool = False, event_level: bool = True
+) -> ak.Array:
+    """Ntupelize one ROOT file and return the dataset, without writing it.
+
+    Exactly one of jet_level / event_level may be set: they describe two
+    different row meanings (one row per jet vs one row per event) and so cannot
+    share an output.
+
+    Returns:
+        Either the [total_jets, ...] jet-level dataset or the [events, ...]
+        event-level one, cleaned of bad particles and jets in both cases.
+    """
+    if jet_level == event_level:
+        raise ValueError(
+            "Set exactly one of jet_level / event_level, got "
+            f"jet_level={jet_level}, event_level={event_level}"
+        )
     events = load_file_contents(path=input_path, tree_name="events")
     combined_jet, particle_data = construct_jet_based_dataset(events)
 
@@ -467,14 +482,8 @@ def ntupelize_file(
             & np.isfinite(jet_dataset.jet_eta)
             & (jet_dataset.jet_energy <= 91.2)
         )
-        jet_dataset = jet_dataset[(~jet_contains_bad_particle) * valid_jets]
-        ak.to_parquet(
-            jet_dataset,
-            output_path,
-            row_group_size=1024,
-            compression="zstd",
-            compression_level=6,
-        )
+        return jet_dataset[(~jet_contains_bad_particle) * valid_jets]
+
     if event_level:
         # Merge jet-level [events, jets, ...] with event-level [events] fields
         bad_particle = (
@@ -500,7 +509,7 @@ def ntupelize_file(
         event_dataset = evc.get_event_variables(
             particle_data=particle_data, jet_data=combined_jet
         )
-        final_dataset = ak.zip(
+        return ak.zip(
             {
                 **{f: event_dataset[f] for f in event_dataset.fields},
                 **{f: combined_jet[f] for f in combined_jet.fields},
@@ -508,10 +517,27 @@ def ntupelize_file(
             },
             depth_limit=1,
         )
-        ak.to_parquet(
-            final_dataset,
-            output_path,
-            row_group_size=1024,
-            compression="zstd",
-            compression_level=6,
-        )
+
+
+def ntupelize_file(
+    input_path: str,
+    output_path: str,
+    jet_level: bool = False,
+    event_level: bool = True,
+    row_group_size: int = 1024,
+):
+    """Ntupelize one ROOT file into one .parquet file.
+
+    Kept for one-off use; the processing jobs fill fixed-size chunk files
+    instead, see scripts/ntupelize_list.py.
+    """
+    dataset = build_dataset(
+        input_path=input_path, jet_level=jet_level, event_level=event_level
+    )
+    ak.to_parquet(
+        dataset,
+        output_path,
+        row_group_size=row_group_size,
+        compression="zstd",
+        compression_level=6,
+    )
