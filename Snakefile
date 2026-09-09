@@ -3,9 +3,19 @@ Minimal ML-Tau data processing workflow.
 
 Stages:
   1. ntupelize     - process each input file 1:1 to output
-  2. merge_split   - merge per-dataset outputs, split into train/val/test
-  3. weights       - compute weights from train, apply to val/test
-  4. validation    - produce validation plots per dataset per split
+  2. weights       - accumulate the (p, theta) weight matrices straight from the
+                     ntupelized batches
+  3. merge_split   - stream the ntupelized batches of each dataset into
+                     train/test chunk files of `chunk_size` events, weighting
+                     as they are filled
+  4. validation    - produce validation plots
+  5. torch         - convert each chunk to a pre-built .pt tensor file
+
+The final products are numbered chunk files in OUTPUT_DIR, e.g.
+z_train_00000.parquet, z_train_00001.parquet, ..., qq_test_00000.parquet, plus a
+.pt file next to each of them.  A split is never materialised as a single file,
+nor as an unweighted copy, nor as a merged intermediate: stage 3 reads each
+event once and writes it once, buffering only as much as one output file holds.
 """
 
 import os
@@ -43,6 +53,46 @@ BKG_DATASET = next(ds for ds, cfg in DATASETS.items() if not cfg["is_signal"])
 
 # Single shared directory for weight matrices and bin-edge arrays.
 WEIGHTS_DIR = f"{OUTPUT_DIR}/weights"
+
+# Maximum number of events (jets) per output .parquet file.  Each split is
+# written as a numbered series of files instead of one big file, so that the
+# training dataloader can stream / shard them and no single file has to be read
+# in full.  Override via workflow.yaml (chunk_size) or --config chunk_size=...
+CHUNK_SIZE = config.get("chunk_size", 100_000)
+
+# Rows per parquet row group inside those files.  Row groups are the unit of a
+# partial read, so small ones keep the dataloader's reads cheap; see
+# DEFAULT_ROW_GROUP_SIZE in merge_files.py for what that costs bulk reads.
+ROW_GROUP_SIZE = config.get("row_group_size", 1024)
+
+# Width of the zero-padded chunk index in the filenames written by
+# merge_files.py (CHUNK_INDEX_WIDTH there); keep the two in step.
+CHUNK_INDEX_WIDTH = 5
+
+# Index of the chunk the validation plots are made from.  They load their input
+# in full, so they look at one chunk (CHUNK_SIZE events) rather than the whole
+# split, which is plenty of statistics for distribution shapes.
+VALIDATION_CHUNK = 0
+
+# Because the number of chunk files is only known once the merge has counted the
+# events, the merge stage cannot declare its outputs one file per rule output.
+# It declares one marker file per split here instead, and the downstream stages
+# glob the chunks at runtime.  Note the consequence: deleting an individual
+# chunk .parquet does not by itself make Snakemake rebuild it — delete the
+# corresponding marker (or the whole split) to force a rerun.
+MARKER_DIR = f"{OUTPUT_DIR}/.markers"
+
+
+def chunks_marker(short_name, split):
+    """Marker file standing in for the chunk files of one split."""
+    return f"{MARKER_DIR}/{short_name}_{split}.chunks"
+
+
+def first_chunk(short_name, split):
+    """Path of the first weighted chunk file of a split — always exists."""
+    index = f"{VALIDATION_CHUNK:0{CHUNK_INDEX_WIDTH}d}"
+    return f"{OUTPUT_DIR}/{short_name}_{split}_{index}.parquet"
+
 
 # Number of input ROOT files to process in a single SLURM job.
 # Reduces DAG size from O(N_files) to O(N_files / BATCH_SIZE).
@@ -143,8 +193,8 @@ localrules: all, compute_weights, validation, preprocess_torch
 
 rule all:
     input:
-        [f"{OUTPUT_DIR}/{SHORT_NAMES[ds]}_{split}.parquet" for ds in DATASETS for split in SPLITS],
-        [f"{OUTPUT_DIR}/{SHORT_NAMES[ds]}_{split}.pt" for ds in DATASETS for split in SPLITS],
+        [chunks_marker(SHORT_NAMES[ds], split) for ds in DATASETS for split in SPLITS],
+        f"{MARKER_DIR}/torch.done",
         f"{OUTPUT_DIR}/validation/.done",
         f"{WEIGHTS_DIR}/sig_weights.npy",
 
@@ -160,9 +210,11 @@ rule ntupelize:
         # _DATASET_BATCHES is pre-computed at startup so this lookup is O(1).
         lambda wc: _DATASET_BATCHES[wc.dataset][int(wc.batch_idx)]
     output:
-        # One output parquet per batch; temp() deletes it once merge_and_split
-        # has consumed it to avoid accumulating large intermediate files.
-        temp(f"{TEMP_DIR}/{{dataset}}/batch_{{batch_idx}}.parquet")
+        # One output parquet per batch, kept rather than temp(): these are the
+        # only intermediate the pipeline has, and holding on to them means the
+        # merge/split/weight stage can be re-run — with a different chunk_size
+        # or train_frac, say — without re-ntupelizing thousands of ROOT files.
+        f"{TEMP_DIR}/{{dataset}}/batch_{{batch_idx}}.parquet"
     params:
         is_signal        = lambda wc: DATASETS[wc.dataset]["is_signal"],
         ntupelizer_class = NTUPELIZER_CLASS,
@@ -245,54 +297,15 @@ PYEOF
         """
 
 
-# ── stage 2 : merge all ntupelized outputs → split files ─────────────────────
-# One rule is generated per dataset because the output filenames include the
-# dataset-specific short_name (e.g. z_train.parquet, qq_test.parquet).
-# Snakemake output patterns must be statically derivable from wildcards alone,
-# so a single parameterised rule cannot encode a config-lookup in its output
-# path.  Generating one rule per dataset at DAG-construction time is the
-# idiomatic Snakemake solution for this pattern.
-for _ds, _cfg in DATASETS.items():
-    _short = SHORT_NAMES[_ds]
-    rule:
-        name: f"merge_and_split_{_ds}"
-        localrule: True
-        input:
-            # Capture _ds in the default arg to avoid the Python late-binding
-            # closure problem inside a for-loop.
-            lambda wc, ds=_ds: ntupelized_files_for(ds)
-        output:
-            # The f-string resolves _ds and _short at loop time; {{split}}
-            # becomes {split} after f-string processing so expand() can fill it.
-            [temp(f"{OUTPUT_DIR}/{_ds}/split/{_short}_{split}.parquet") for split in SPLITS]
-        params:
-            input_dir  = f"{TEMP_DIR}/{_ds}",
-            outdir     = f"{OUTPUT_DIR}/{_ds}/split",
-            short_name = _short,
-            train_frac = _cfg.get("train_frac", 0.8),
-            container  = CONTAINER,
-        resources:
-            mem_mb  = 32_000,
-            runtime = 60,
-        shell:
-            """
-            mkdir -p {params.outdir}
-            {params.container} python ntupelizer/scripts/merge_files.py \
-                -i {params.input_dir} \
-                -o {params.outdir} \
-                -s {params.short_name} \
-                -f {params.train_frac}
-            """
-
-
-# ── stage 3a : compute weight matrices (single global job) ───────────────────
-# Weights are computed by comparing signal vs background train distributions.
-# One weight matrix is produced for each side (sig_weights.npy, bkg_weights.npy)
-# plus the bin-edge arrays so apply_weights can reconstruct the lookup at runtime.
+# ── stage 2 : compute weight matrices (single global job) ────────────────────
+# Weights are computed by comparing the signal and background (p, theta)
+# distributions.  Only the gen_jet_p4 column is read, so this runs directly on
+# the ntupelized batches — before any merging — which is what allows stage 3 to
+# apply the weights in the same pass that writes its output.
 rule compute_weights:
     input:
-        sig = f"{OUTPUT_DIR}/{SIG_DATASET}/split/{SHORT_NAMES[SIG_DATASET]}_train.parquet",
-        bkg = f"{OUTPUT_DIR}/{BKG_DATASET}/split/{SHORT_NAMES[BKG_DATASET]}_train.parquet",
+        sig = lambda wc: ntupelized_files_for(SIG_DATASET),
+        bkg = lambda wc: ntupelized_files_for(BKG_DATASET),
     output:
         sig_w    = f"{WEIGHTS_DIR}/sig_weights.npy",
         bkg_w    = f"{WEIGHTS_DIR}/bkg_weights.npy",
@@ -300,6 +313,8 @@ rule compute_weights:
         th_edges = f"{WEIGHTS_DIR}/theta_edges.npy",
     params:
         output_dir     = WEIGHTS_DIR,
+        sig_dir        = f"{TEMP_DIR}/{SIG_DATASET}",
+        bkg_dir        = f"{TEMP_DIR}/{BKG_DATASET}",
         produce_plots  = config.get("weights", {}).get("produce_plots", False),
         n_files        = config.get("weights", {}).get("n_files_per_sample", -1),
         container      = CONTAINER,
@@ -310,61 +325,101 @@ rule compute_weights:
         """
         mkdir -p {params.output_dir}
         {params.container} python ntupelizer/scripts/compute_weights.py \
-            -i {input.sig} \
-            -b {input.bkg} \
+            -i {params.sig_dir} \
+            -b {params.bkg_dir} \
             -o {params.output_dir} \
             -n {params.n_files} \
             $([ '{params.produce_plots}' = 'True' ] && echo '-p' || true)
         """
 
 
-# ── stage 3b : apply weights to every split ──────────────────────────────────
-# One rule per split: applies signal and background weight matrices in a single
-# call and optionally produces a weight distribution plot.
-for _split in SPLITS:
+# ── stage 3 : stream the batches into weighted train/test chunks ─────────────
+# One rule is generated per dataset because the output paths include the
+# dataset-specific short_name (e.g. z_train_00000.parquet, qq_test_00003.parquet).
+# Snakemake output patterns must be statically derivable from wildcards alone,
+# so a single parameterised rule cannot encode a config-lookup in its output
+# path.  Generating one rule per dataset at DAG-construction time is the
+# idiomatic Snakemake solution for this pattern.
+#
+# Row groups are pulled from the batches in turn and appended to the train or
+# test fill buffer, each of which writes an output file once it holds
+# chunk_size events; an input running out mid-file just means the next one is
+# opened and keeps filling.
+#
+# How many chunk files a split needs depends on its event count, which is only
+# known once the merge has run, so each split is represented by a marker file
+# plus its first chunk (which always exists) rather than by every chunk.
+for _ds, _cfg in DATASETS.items():
+    _short = SHORT_NAMES[_ds]
+    # The .pt tensors of stage 5 are built from these chunks, so drop any that
+    # were built from a previous run's chunks; the .parquet files themselves are
+    # cleaned up by merge_files.py, which owns them.
+    _stale_pt = " ".join(
+        f"{OUTPUT_DIR}/{_short}_{split}_*.{ext}"
+        for split in SPLITS
+        for ext in ("pt", "pt.progress")
+    )
     rule:
-        name: f"apply_weights_{_split}"
+        name: f"merge_and_split_{_ds}"
         localrule: True
         input:
-            sig      = f"{OUTPUT_DIR}/{SIG_DATASET}/split/{SHORT_NAMES[SIG_DATASET]}_{_split}.parquet",
-            bkg      = f"{OUTPUT_DIR}/{BKG_DATASET}/split/{SHORT_NAMES[BKG_DATASET]}_{_split}.parquet",
+            # Capture _ds in the default arg to avoid the Python late-binding
+            # closure problem inside a for-loop.
+            batches  = lambda wc, ds=_ds: ntupelized_files_for(ds),
             sig_w    = f"{WEIGHTS_DIR}/sig_weights.npy",
             bkg_w    = f"{WEIGHTS_DIR}/bkg_weights.npy",
             p_edges  = f"{WEIGHTS_DIR}/p_edges.npy",
             th_edges = f"{WEIGHTS_DIR}/theta_edges.npy",
         output:
-            sig_out = f"{OUTPUT_DIR}/{SHORT_NAMES[SIG_DATASET]}_{_split}.parquet",
-            bkg_out = f"{OUTPUT_DIR}/{SHORT_NAMES[BKG_DATASET]}_{_split}.parquet",
+            # One marker per split, plus the first chunk of each, which the
+            # validation stage reads directly.
+            [touch(chunks_marker(_short, split)) for split in SPLITS],
+            [first_chunk(_short, split) for split in SPLITS],
         params:
-            weights_dir   = WEIGHTS_DIR,
-            output_dir    = OUTPUT_DIR,
-            produce_plots = config.get("weights", {}).get("produce_plots", False),
-            container     = CONTAINER,
+            input_dir   = f"{TEMP_DIR}/{_ds}",
+            output_dir  = OUTPUT_DIR,
+            short_name  = _short,
+            train_frac  = _cfg.get("train_frac", 0.8),
+            chunk_size  = CHUNK_SIZE,
+            row_group   = ROW_GROUP_SIZE,
+            side        = "sig" if _cfg["is_signal"] else "bkg",
+            weights_dir = WEIGHTS_DIR,
+            stale_pt    = _stale_pt,
+            container   = CONTAINER,
         resources:
             mem_mb  = 32_000,
-            runtime = 30,
+            runtime = 120,
         shell:
             """
-            {params.container} python ntupelizer/scripts/apply_weights.py \
-                -i {input.sig} \
-                -b {input.bkg} \
-                -w {params.weights_dir} \
+            mkdir -p {params.output_dir}
+            rm -f {params.stale_pt}
+            {params.container} python ntupelizer/scripts/merge_files.py \
+                -i {params.input_dir} \
                 -o {params.output_dir} \
-                $([ '{params.produce_plots}' = 'True' ] && echo '-p' || true)
+                -s {params.short_name} \
+                -f {params.train_frac} \
+                -w {params.weights_dir} \
+                --side {params.side} \
+                --chunk-size {params.chunk_size} \
+                --row-group-size {params.row_group}
             """
 
 
 # ── stage 4 : validation ──────────────────────────────────────────────────────
-# Single global job taking all weighted files across all datasets and splits.
+# Single global job comparing the signal and background distributions, including
+# the weight distributions that apply_weights.py -p used to produce.
 rule validation:
     input:
-        [f"{OUTPUT_DIR}/{SHORT_NAMES[ds]}_train.parquet" for ds in DATASETS]
+        # Plots are made from the first train chunk of each dataset: the
+        # validate_ntuples.py plots load their input in full, and one chunk
+        # (CHUNK_SIZE jets) is plenty of statistics for distribution shapes.
+        [first_chunk(SHORT_NAMES[ds], "train") for ds in DATASETS]
     output:
         touch(f"{OUTPUT_DIR}/validation/.done")
     params:
         outdir    = f"{OUTPUT_DIR}/validation",
-        sig_file  = f"{OUTPUT_DIR}/{SHORT_NAMES[SIG_DATASET]}_train.parquet",
-        bkg_file  = f"{OUTPUT_DIR}/{SHORT_NAMES[BKG_DATASET]}_train.parquet",
+        sig_file  = first_chunk(SHORT_NAMES[SIG_DATASET], "train"),
+        bkg_file  = first_chunk(SHORT_NAMES[BKG_DATASET], "train"),
         container = CONTAINER,
     resources:
         mem_mb  = 32_000,
@@ -380,14 +435,16 @@ rule validation:
 
 
 # ── stage 5 : preprocess to .pt tensors ──────────────────────────────────────
-# One-time conversion of the final weighted .parquet files into pre-built
+# One-time conversion of the final weighted .parquet chunks into pre-built
 # PyTorch tensor files (.pt) so the training dataloader can skip the
-# parquet→tensor conversion on every run.
+# parquet→tensor conversion on every run.  One .pt is written next to each
+# chunk (z_train_0.parquet → z_train_0.pt); already converted chunks are
+# skipped, so an interrupted job resumes where it left off.
 rule preprocess_torch:
     input:
-        [f"{OUTPUT_DIR}/{SHORT_NAMES[ds]}_{split}.parquet" for ds in DATASETS for split in SPLITS]
+        [chunks_marker(SHORT_NAMES[ds], split) for ds in DATASETS for split in SPLITS]
     output:
-        [f"{OUTPUT_DIR}/{SHORT_NAMES[ds]}_{split}.pt" for ds in DATASETS for split in SPLITS]
+        touch(f"{MARKER_DIR}/torch.done")
     params:
         input_dir  = OUTPUT_DIR,
         max_cands  = config.get("max_cands", 20),

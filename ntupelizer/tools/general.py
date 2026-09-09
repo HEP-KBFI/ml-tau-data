@@ -1,5 +1,6 @@
 import glob
 import os
+import re
 
 import awkward as ak
 import boost_histogram as bh
@@ -144,6 +145,50 @@ def get_all_paths(input_loc, n_files: int = None) -> list:
     else:
         raise ValueError(f"Unexpected input_loc: {input_loc}")
     return input_paths
+
+
+def natural_key(path: str) -> tuple:
+    """Sort key that orders trailing chunk indices numerically.
+
+    Chunk indices are zero-padded (z_train_00000.parquet), so a lexicographic
+    sort is already correct for them; this key additionally stays correct if a
+    file series is ever written unpadded, where plain sorting would place _10
+    before _2.
+    """
+    return tuple(
+        int(part) if part.isdigit() else part
+        for part in re.split(r"(\d+)", os.path.basename(path))
+    )
+
+
+def split_chunk_paths(input_loc: str, split: str = None) -> list:
+    """Resolve a set of .parquet inputs to an ordered list of paths.
+
+    Parameters:
+        input_loc : str
+            Either a directory of .parquet files, or a single .parquet file.
+        split : str
+            When input_loc is a directory: select only the chunks of this split
+            (files named <short_name>_<split>_<index>.parquet). Pass None to
+            take every .parquet in the directory, which is what the raw
+            ntupelized batch directories need.
+
+    Returns:
+        paths : list
+            Paths in natural (numeric) order. A single input file is returned as
+            a one-element list, so callers keep working with unchunked inputs.
+    """
+    if os.path.isdir(input_loc):
+        pattern = os.path.join(
+            input_loc, f"*_{split}_*.parquet" if split else "*.parquet"
+        )
+        paths = sorted(glob.glob(pattern), key=natural_key)
+        if not paths:
+            raise FileNotFoundError(f"No .parquet files matching {pattern}")
+        return paths
+    if os.path.isfile(input_loc):
+        return [input_loc]
+    raise FileNotFoundError(f"No such file or directory: {input_loc}")
 
 
 def load_parquet(input_path: str, columns: list = None) -> ak.Array:

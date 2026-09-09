@@ -18,14 +18,20 @@ jinja_env = Environment(loader=FileSystemLoader(orchestration_dir / "templates")
 
 
 def submit_slurm_job(
-    input_paths: str, output_dir: str, output_level: str, idx: int
+    input_paths: str,
+    output_dir: str,
+    output_level: str,
+    idx: int,
+    jets_per_file: int,
+    row_group_size: int,
 ) -> str:
-    """Submit a SLURM job for processing a chunk of files."""
-    output_paths = []
-    for input_path in input_paths:
-        basename = os.path.basename(input_path).split(".")[0]
-        output_path = os.path.join(output_dir, f"{basename}.parquet")
-        output_paths.append(output_path)
+    """Write the SLURM job script for processing a chunk of input files.
+
+    The job streams its files into output chunks of jets_per_file jets. Its
+    output filenames carry a per-job prefix, since the jobs run concurrently
+    and cannot share a file index; scripts/rechunk.py consolidates the leftover
+    tail files into a single uniform series once the jobs are done.
+    """
     job_dir = os.path.join(output_dir, "submission_scripts")
     err_dir = os.path.join(output_dir, "error_files")
     out_dir = os.path.join(output_dir, "out_files")
@@ -36,7 +42,6 @@ def submit_slurm_job(
     job_script_path = os.path.join(job_dir, f"chunk_{idx}.sh")
 
     input_paths_str = ",".join(input_paths)
-    output_paths_str = ",".join(output_paths)
 
     template = jinja_env.get_template("ntupelize_files.sh.j2")
     job_script_content = template.render(
@@ -53,8 +58,11 @@ def submit_slurm_job(
         environment_script="/home/laurits/ml-tau/ml-tau-data/run.sh",
         processing_script="/home/laurits/ml-tau/ml-tau-data/ntupelizer/aleph/scripts/ntupelize_list.py",
         input_paths=input_paths_str,
-        output_paths=output_paths_str,
+        output_dir=output_dir,
+        prefix=f"job{idx:04d}",
         output_level=output_level,
+        jets_per_file=jets_per_file,
+        row_group_size=row_group_size,
     )
 
     with open(job_script_path, "wt") as f:
@@ -80,6 +88,8 @@ def main(cfg: DictConfig) -> None:
     output_dir = cfg.output_dir
     num_chunks = cfg.num_chunks
     output_level = cfg.output_level
+    jets_per_file = cfg.get("jets_per_file", 100_000)
+    row_group_size = cfg.get("row_group_size", 1024)
 
     input_wcp = os.path.join(input_dir, "*", "data_*.root")
     input_paths = list(glob.glob(input_wcp))
@@ -93,6 +103,8 @@ def main(cfg: DictConfig) -> None:
             output_dir=output_dir,
             output_level=output_level,
             idx=i,
+            jets_per_file=jets_per_file,
+            row_group_size=row_group_size,
         )
 
 
