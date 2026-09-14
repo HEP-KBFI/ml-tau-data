@@ -131,3 +131,6 @@ dmypy.json
 .venv/
 .vscode/
 .codex
+logs/
+.snakemake*
+.venv*/

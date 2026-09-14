@@ -43,19 +43,27 @@ class GenTauInfoMatcher:
             "tau_charge",
             "tau_daughter_PDG",
         ]
+        # The numeric fill values are floats on purpose.  A Python int here would
+        # be a different dtype from the real (float) values, so a file in which
+        # nothing matched would write int64 columns while every other file writes
+        # float64 -- and the per-batch ParquetWriter in the Snakefile fixes its
+        # schema from the first file it reads, so one such file aborts the batch.
+        # tau_decaymode stays an int because its real values are ints too.
         self.fill_values = {
-            "tau_vis_energy": 0,
+            "tau_vis_energy": 0.0,
             "tau_decaymode": -1,
-            "tau_charge": -999,
-            # Use the {pt, eta, phi, energy} dummy so that the type matches the
-            # real tau p4s (which go through reinitialize_p4).  Using
-            # DUMMY_P4_VECTOR ({mass, x, y, z}) would create a type union in
-            # the awkward array, which parquet cannot serialise.
-            "tau_full_p4": g.DUMMY_P4_PTETA,
-            "tau_p4": g.DUMMY_P4_PTETA,  # This is the visible p4
-            "tau_DV_x": -1,
-            "tau_DV_y": -1,
-            "tau_DV_z": -1,
+            "tau_charge": -999.0,
+            # The dummy must be in exactly the schema `reinitialize_p4` returns
+            # (vector's rho/phi/eta/t field names), because these fill values sit
+            # in the same array as the real tau p4s.  A literal
+            # {pt, eta, phi, energy} record -- or DUMMY_P4_VECTOR's
+            # {mass, x, y, z} -- merges into a union instead, leaving the matched
+            # taus with a null `pt` and the unmatched jets with a null `rho`.
+            "tau_full_p4": g.DUMMY_P4_STANDARD,
+            "tau_p4": g.DUMMY_P4_STANDARD,  # This is the visible p4
+            "tau_DV_x": -1.0,
+            "tau_DV_y": -1.0,
+            "tau_DV_z": -1.0,
         }
 
     def map_pdgid_to_candid(self, pdg_id):
