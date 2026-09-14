@@ -37,28 +37,21 @@ class EDM4HEPNtupelizer:
         raise NotImplementedError("Please implement input loader for your subclass")
 
     def retrieve_dummy_tau_values(self, gen_jets):
-        filler = g.reinitialize_p4(ak.zeros_like(gen_jets))
+        # `ak.without_parameters` drops vector's Momentum4D record parameter.  The
+        # signal p4s lose it anyway on their way through get_matched_gen_tau_property,
+        # so keeping it here would make signal and background concatenate into a
+        # union of two otherwise identical record types.
+        filler = ak.without_parameters(g.reinitialize_p4(ak.zeros_like(gen_jets)))
         gen_jet_tau_info = {
             "gen_jet_tau_vis_energy": ak.zeros_like(gen_jets.eta),
             "gen_jet_tau_decaymode": ak.ones_like(gen_jets.eta) * -1,
             "gen_jet_tau_charge": ak.ones_like(gen_jets.eta) * -999,
-            # Use {pt, eta, phi, energy} to match the signal schema from reinitialize_p4
-            "gen_jet_tau_full_p4": ak.zip(
-                {
-                    "pt": filler.pt,
-                    "eta": filler.eta,
-                    "phi": filler.phi,
-                    "energy": filler.energy,
-                }
-            ),
-            "gen_jet_tau_p4": ak.zip(
-                {
-                    "pt": filler.pt,
-                    "eta": filler.eta,
-                    "phi": filler.phi,
-                    "energy": filler.energy,
-                }
-            ),
+            # `filler` is already in the standard schema, so it matches the signal
+            # p4s field-for-field.  Re-zipping it under {pt, eta, phi, energy}
+            # would rename vector's rho/t coordinates and make the background
+            # p4s unmergeable with the signal ones.
+            "gen_jet_tau_full_p4": filler,
+            "gen_jet_tau_p4": filler,
             # Must match the signal key names produced by fill_tau_info: gen_jet_{tau_DV_x}
             "gen_jet_tau_DV_x": ak.zeros_like(gen_jets.eta),
             "gen_jet_tau_DV_y": ak.zeros_like(gen_jets.eta),

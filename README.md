@@ -99,7 +99,7 @@ pip install -e ".[full]"
 
 > **Note:** Snakemake 7.x is required. If you see `AttributeError: module 'pulp' has no attribute 'list_solvers'`, your `pulp` version is incompatible. Fix with:
 > ```bash
-> pip install "snakemake>=7,<8" "pulp>=2.7,<3"
+> pip install "snakemake>=7,<8" "pulp>=2.7,<2.8"
 > ```
 
 ## Configuration

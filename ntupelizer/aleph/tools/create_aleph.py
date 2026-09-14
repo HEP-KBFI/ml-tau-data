@@ -27,6 +27,21 @@ def fill_values(array: ak.Array, fill_value: float = -999.9):
     return ak.fill_none(ak.pad_none(array, 1, axis=-1), fill_value)
 
 
+# The ALEPH EDM4HEP files store lengths in ALEPH's native centimetres even
+# though the EDM4HEP schema declares millimetres, so every length taken out of
+# a track state or a vertex is scaled here to make the output spec-compliant.
+#
+# Measured on data_2057_1.root (1994 reprocessing): interpreting omega as 1/cm
+# and taking B = 1.5 T reproduces the momentum of the linked particle to within
+# 1 % for 99.5 % of tracks, while 1/mm is off by exactly a factor 10 for all of
+# them; the vertex z spread of 1.1 (i.e. ~1 cm) matches the ALEPH luminous
+# region. THIS IS A PROPERTY OF THE CURRENT INPUT FILES, NOT OF THE FORMAT: if a
+# later production writes proper EDM4HEP millimetres, set this back to 1.0.
+# (Should the commented-out omega ever be used, note it is 1/cm, i.e. it scales
+# the other way.)
+CM_TO_MM = 10.0
+
+
 def calculate_impact_parameters(
     events: ak.Array, track_states_collection: str = "_Tracks_trackStates"
 ):
@@ -35,29 +50,53 @@ def calculate_impact_parameters(
     ## Here, with fill values, one should have the same # of entries as there are particles.
     ## Therefore a single 0.0 is not enough. Check the shapes.
     ##
-    d0 = fill_values(events[f"{track_states_collection}.D0"])
-    z0 = fill_values(events[f"{track_states_collection}.Z0"])
+    # Lengths are scaled to mm (see CM_TO_MM); phi and tanLambda are an angle
+    # and a ratio, so they are unit-free.  The scaling is applied before
+    # fill_values so that the -999.9 missing-value marker keeps its value.
+    d0 = fill_values(CM_TO_MM * events[f"{track_states_collection}.D0"])
+    z0 = fill_values(CM_TO_MM * events[f"{track_states_collection}.Z0"])
     phi0 = fill_values(events[f"{track_states_collection}.phi"])
     tanL = fill_values(events[f"{track_states_collection}.tanLambda"])
-    # omega = fill_values(events[f"{track_states_collection}.omega"])
-    xr = fill_values(events[f"{track_states_collection}.referencePoint.x"])
-    yr = fill_values(events[f"{track_states_collection}.referencePoint.y"])
-    zr = fill_values(events[f"{track_states_collection}.referencePoint.z"])
+    # omega = fill_values(events[f"{track_states_collection}.omega"] / CM_TO_MM)
+    xr = fill_values(CM_TO_MM * events[f"{track_states_collection}.referencePoint.x"])
+    yr = fill_values(CM_TO_MM * events[f"{track_states_collection}.referencePoint.y"])
+    zr = fill_values(CM_TO_MM * events[f"{track_states_collection}.referencePoint.z"])
 
-    # Extract covariance matrix elements
+    # Extract covariance matrix elements.  EDM4HEP packs the lower triangle of
+    # the 6x6 (d0, phi, omega, z0, tanLambda, time) covariance matrix into 21
+    # values, so entries 0, 2, 9 and 14 are the *variances* of d0, phi, z0 and
+    # tanLambda -- take the square root to turn them into errors.  The maximum
+    # guards against fits that came out with a negative diagonal element.
     cov_matrix = events[f"{track_states_collection}.covMatrix.values[21]"]
-    d0_error = fill_values(cov_matrix[:, :, 0])
-    phi0_error = fill_values(cov_matrix[:, :, 2])
-    z0_error = fill_values(cov_matrix[:, :, 9])
-    tanL_error = fill_values(cov_matrix[:, :, 14])
+    d0_error = fill_values(CM_TO_MM * np.sqrt(np.maximum(cov_matrix[:, :, 0], 0.0)))
+    phi0_error = fill_values(np.sqrt(np.maximum(cov_matrix[:, :, 2], 0.0)))
+    z0_error = fill_values(CM_TO_MM * np.sqrt(np.maximum(cov_matrix[:, :, 9], 0.0)))
+    tanL_error = fill_values(np.sqrt(np.maximum(cov_matrix[:, :, 14], 0.0)))
 
     # Vertex position (assuming you have this defined)
-    vertex_x = ak.flatten(fill_values(events["Vertices.position.x"]), axis=-1)
-    vertex_y = ak.flatten(fill_values(events["Vertices.position.y"]), axis=-1)
-    vertex_z = ak.flatten(fill_values(events["Vertices.position.z"]), axis=-1)
-
-    # Bare in mind that Vertices are not found for some events ... need to find out why
-    ##################
+    # Events without a reconstructed vertex get the -999.9 fill value as their
+    # vertex position, so every impact parameter measured against it (dxy, dz
+    # and their errors) is meaningless for those events -- warn rather than let
+    # ~1000 mm impact parameters pass for real measurements.
+    n_vertices = ak.num(events["Vertices.position.x"])
+    n_missing = int(ak.sum(n_vertices == 0))
+    if n_missing:
+        print(
+            f"WARNING: no reconstructed vertex in {n_missing}/{len(n_vertices)} events; "
+            "their dxy/dz impact parameters are measured against the -999.9 fill "
+            "value and should not be used"
+        )
+    n_multiple = int(ak.sum(n_vertices > 1))
+    if n_multiple:
+        # The flatten() below assumes one vertex per event; more than one would
+        # silently shift every event's vertex onto the wrong event.
+        raise ValueError(
+            f"{n_multiple} events have more than one vertex; the per-event "
+            "vertex broadcast in calculate_impact_parameters assumes at most one"
+        )
+    vertex_x = ak.flatten(fill_values(CM_TO_MM * events["Vertices.position.x"]), axis=-1)
+    vertex_y = ak.flatten(fill_values(CM_TO_MM * events["Vertices.position.y"]), axis=-1)
+    vertex_z = ak.flatten(fill_values(CM_TO_MM * events["Vertices.position.z"]), axis=-1)
 
     # Calculate track origins (vectorized) - from lifetime.py
     x0 = xr + np.cos(np.pi / 2 - phi0) * d0
@@ -149,18 +188,6 @@ def assign_pid_info(arrays: ak.Array) -> ak.Array:
     )
 
 
-def pad_missing_values(
-    pad_target: ak.Array, pad_from: ak.Array, pad_value: float = -999.9
-):
-    n_large = ak.num(pad_from)
-    n_small = ak.num(pad_target)
-    pad_counts = n_large - n_small
-    padding = ak.unflatten(
-        ak.full_like(np.zeros(ak.sum(pad_counts)), pad_value), pad_counts
-    )
-    return ak.concatenate([pad_target, padding], axis=1)
-
-
 def get_cand_info(events: ak.Array) -> ak.Array:
     """Extract and combine info from multiple collections vectorized"""
     # Extract ReconstructedParticles info (all events at once)
@@ -178,16 +205,14 @@ def get_cand_info(events: ak.Array) -> ak.Array:
     # Get PID info
     pid_info = assign_pid_info(events)
     impact_parameters = calculate_impact_parameters(events=events)
-    impact_parameters_choice = find_linked_indices(events=events)
-    impact_parameters = impact_parameters[impact_parameters_choice]
-    # TODO: Check that impact parameters are assigned correctly.
+    # Gather the track state of each particle by position, so that the values
+    # line up with the particles they belong to whatever order the collection
+    # is in, and give the neutral (trackless) ones the missing-value marker.
+    state_index, has_track = find_linked_indices(events=events)
+    impact_parameters = impact_parameters[state_index]
     impact_parameters = ak.zip(
         {
-            field: pad_missing_values(
-                pad_target=impact_parameters[field],
-                pad_from=pid_info["is_charged_hadron"],
-                pad_value=-999.9,
-            )
+            field: ak.where(has_track, impact_parameters[field], -999.9)
             for field in impact_parameters.fields
         }
     )
@@ -223,18 +248,43 @@ def find_linked_indices(
     events: ak.Array,
     begin_branch: str = "RecoParticles.tracks_begin",
     end_branch: str = "RecoParticles.tracks_end",
+    relation_branch: str = "_RecoParticles_tracks.index",
+    state_begin_branch: str = "Tracks.trackStates_begin",
 ):
+    """Track state of every reconstructed particle, [events, particles].
+
+    podio stores the particle -> track link in two hops, and both have to be
+    followed:
+
+      1. tracks_begin/end are offsets into the *relation* collection
+         _RecoParticles_tracks, not into Tracks. Its entries hold the index of
+         the track. Using tracks_begin directly as a track index only works
+         when the two collections happen to line up; in the ALEPH files each
+         track is stored twice (Tracks is 2.25x the number of referenced
+         tracks), so it lands on the right track ~16% of the time and picks an
+         unrelated track in the event otherwise.
+      2. a track's parameters live in _Tracks_trackStates, starting at
+         Tracks.trackStates_begin. The ALEPH files store exactly one state per
+         track (location 0, at the IP), so this hop is the identity there, but
+         following it keeps the lookup correct for files that store several.
+
+    Returns:
+        (state_index, has_track): both [events, particles]. state_index is only
+        meaningful where has_track is True; elsewhere it is a valid dummy so
+        that the gather stays in range.
+    """
     begins = events[begin_branch]
-    ends = events[end_branch]
-    counts = ends - begins
-    flat_counts = ak.flatten(counts)
-    total = ak.sum(flat_counts)
-    base = np.zeros(total, dtype=int)
-    local = ak.unflatten(base, flat_counts)
-    local = ak.local_index(local)
-    local = ak.unflatten(local, ak.num(counts))
-    indices = begins + local
-    return ak.flatten(indices, axis=-1)
+    has_track = (events[end_branch] - begins) > 0
+
+    # Pad to at least one entry per event so that the dummy index 0 used for
+    # trackless particles stays in range even in events with no tracks at all.
+    relation = ak.fill_none(ak.pad_none(events[relation_branch], 1, axis=1), 0)
+    state_begin = ak.fill_none(ak.pad_none(events[state_begin_branch], 1, axis=1), 0)
+
+    relation_position = ak.values_astype(ak.where(has_track, begins, 0), np.int64)
+    track_index = ak.values_astype(relation[relation_position], np.int64)
+    state_index = ak.values_astype(state_begin[track_index], np.int64)
+    return state_index, has_track
 
 
 def cluster_particles_to_jets(
@@ -468,7 +518,7 @@ def build_dataset(
     # Flatten from [events, jets, ...] to [total_jets, ...] at the very end
     if jet_level:
         jet_dataset = ak.Array(
-            {k: ak.flatten(v, axis=1) for k, v in combined_jet.items()}
+            {k: ak.flatten(combined_jet[k], axis=1) for k in combined_jet.fields}
         )
         bad_particle = (
             (jet_dataset.part_pt <= 0)

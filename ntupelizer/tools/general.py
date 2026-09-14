@@ -18,19 +18,6 @@ DUMMY_P4_VECTOR = vector.awk(
     )
 )[0]
 
-# Canonical zero p4 in the standardised {pt, eta, phi, energy} schema.
-# Use this as the fill/dummy value wherever p4s are stored in that format
-# (i.e. after reinitialize_p4), so that the type stays consistent when
-# mixing matched and unmatched jets in an awkward array.
-DUMMY_P4_PTETA = ak.zip(
-    {
-        "pt": [0.0],
-        "eta": [0.0],
-        "phi": [0.0],
-        "energy": [0.0],
-    }
-)[0]
-
 
 def reinitialize_p4(p4_obj: ak.Array):
     """Reinitialized the 4-momentum for particle in order to access its properties.
@@ -52,8 +39,28 @@ def reinitialize_p4(p4_obj: ak.Array):
         "t": "energy",
         "rho": "pt",
     }
+    # Two source fields can map onto the same coordinate name -- e.g. a record
+    # carrying both `rho` and `pt`, which is what a union of vector's internal
+    # schema ({rho, phi, eta, t}) and the literal {pt, eta, phi, energy} schema
+    # looks like after awkward merges them.  Building the zip straight from a
+    # dict comprehension would silently let the later field win, and in such a
+    # union the later field is the all-null one, so every `pt` and `energy`
+    # would come out null and `ak.fill_none(..., 0.0)` downstream would turn
+    # them into a column of zeros that looks like real data.  Refuse instead:
+    # a collision always means the input schema is wrong upstream.
+    coordinates = {}
+    for field in p4_obj.fields:
+        name = name_map.get(field, field)
+        if name in coordinates:
+            raise ValueError(
+                f"Ambiguous p4 schema {p4_obj.fields}: fields "
+                f"{coordinates[name]!r} and {field!r} both map to the "
+                f"coordinate {name!r}. This is usually a union of two p4 "
+                f"representations that should have been written as one."
+            )
+        coordinates[name] = field
     p4 = vector.awk(
-        ak.zip({name_map.get(field, field): p4_obj[field] for field in p4_obj.fields})
+        ak.zip({name: p4_obj[field] for name, field in coordinates.items()})
     )
     # Now make it so that the 4-vector is always saved in a similar fashion:
     p4 = vector.awk(
@@ -67,6 +74,25 @@ def reinitialize_p4(p4_obj: ak.Array):
         )
     )
     return p4
+
+
+# Canonical zero p4 in the standardised schema, i.e. the one `reinitialize_p4`
+# produces.  Note that vector stores those coordinates under its own field names
+# (rho, phi, eta, t), so a literal {pt, eta, phi, energy} record is NOT the same
+# schema: mixing the two in one awkward array builds a six-field union in which
+# every entry is null on one side of the mix.  Build the dummy through
+# `reinitialize_p4` so it always tracks the real p4s, and use it as the
+# fill/dummy value wherever matched and unmatched objects share an array.
+DUMMY_P4_STANDARD = reinitialize_p4(
+    ak.zip(
+        {
+            "pt": [0.0],
+            "eta": [0.0],
+            "phi": [0.0],
+            "energy": [0.0],
+        }
+    )
+)[0]
 
 
 def get_jet_constituent_property(property_, constituent_idx, num_ptcls_per_jet):

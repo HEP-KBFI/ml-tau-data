@@ -65,6 +65,10 @@ CHUNK_SIZE = config.get("chunk_size", 100_000)
 # DEFAULT_ROW_GROUP_SIZE in merge_files.py for what that costs bulk reads.
 ROW_GROUP_SIZE = config.get("row_group_size", 1024)
 
+# Seed the train/test assignment and per-output-file shuffle so reruns with the
+# same inputs and configuration produce the same parquet contents.
+SPLIT_SEED = config.get("split_seed", None)
+
 # Width of the zero-padded chunk index in the filenames written by
 # merge_files.py (CHUNK_INDEX_WIDTH there); keep the two in step.
 CHUNK_INDEX_WIDTH = 5
@@ -223,9 +227,12 @@ rule ntupelize:
         # are concatenated into the single batch output at the end.
         per_file_tmp = lambda wc: f"{TEMP_DIR}/{wc.dataset}/.batch_{wc.batch_idx}_tmp",
     resources:
-        # Scale memory and runtime with batch size.
-        mem_mb  = lambda wc, input: 2_000 * len(input),
+        # No mem_mb here: the batch's files are processed one at a time, so peak
+        # RSS is set by the single largest file, not by files_per_job.  The
+        # profile default (2 GB) applies.
         cpus    = 1,
+        # Runtime, unlike memory, really is proportional to the batch size:
+        # the files are processed sequentially, so their times add up.
         runtime = lambda wc, input: 20 * len(input),
     shell:
         # Process each file in the batch, then concatenate into one parquet.
@@ -382,6 +389,7 @@ for _ds, _cfg in DATASETS.items():
             train_frac  = _cfg.get("train_frac", 0.8),
             chunk_size  = CHUNK_SIZE,
             row_group   = ROW_GROUP_SIZE,
+            split_seed  = SPLIT_SEED,
             side        = "sig" if _cfg["is_signal"] else "bkg",
             weights_dir = WEIGHTS_DIR,
             stale_pt    = _stale_pt,
@@ -401,7 +409,8 @@ for _ds, _cfg in DATASETS.items():
                 -w {params.weights_dir} \
                 --side {params.side} \
                 --chunk-size {params.chunk_size} \
-                --row-group-size {params.row_group}
+                --row-group-size {params.row_group} \
+                --seed {params.split_seed}
             """
 
 
