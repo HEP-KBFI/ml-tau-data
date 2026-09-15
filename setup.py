@@ -8,7 +8,10 @@ CORE_DEPS = [
     "jinja2",
     "omegaconf",
     "snakemake>=7,<8",
-    "pulp>=2.7,<3",
+    # Snakemake 7 calls pulp.list_solvers(), which pulp removed in 2.8 (it is
+    # listSolvers() there).  Without this upper bound `snakemake --help` itself
+    # dies with AttributeError before any workflow is read.
+    "pulp>=2.7,<2.8",
 ]
 
 # Full dependencies for running the actual ntupelization

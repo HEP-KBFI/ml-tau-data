@@ -154,6 +154,8 @@ WANTED_COLUMNS = [
     # targets
     "gen_jet_p4",  # generated jet p4
     "gen_jet_tau_p4",  # tau visible momentum, excluding neutrino
+    "gen_jet_tau_full_p4",  # tau momentum including the neutrino
+    "gen_jet_tau_vis_energy",  # == gen_jet_tau_p4.energy, carried for convenience
     "gen_jet_tau_decaymode",  # tau decay mode
     "gen_jet_tau_charge",
     # tau daughter info (only present with DecayProductNtupelizer)
