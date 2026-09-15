@@ -2,21 +2,14 @@
 
 Data processing pipeline for the machine-learned hadronically-decaying tau lepton reconstruction and identification project. Takes EDM4HEP/PodioROOT simulation files and produces flat Parquet ntuples ready for ML training.
 
-## Setup
-```
-https://github.com/HEP-KBFI/ml-tau-data
-git submodule update --init --recursive
-```
-
 ## Overview
 
-The workflow is managed by **Snakemake** and consists of five stages:
+The workflow is managed by **Snakemake** and consists of four stages:
 
-1. **ntupelize** — process each input ROOT file into a per-file Parquet (one SLURM job per file, grouped 20 per job)
+1. **ntupelize** — process each input ROOT file into a per-file Parquet, then concatenate the batch into one. One SLURM job handles `files_per_job` ROOT files (default 20), processed sequentially
 2. **weights** — accumulate the `(p, theta)` reweighting matrices. Only the `gen_jet_p4` column is read, so this runs directly on the ntupelized batches, before any merging
 3. **merge\_and\_split** — stream the ntupelized batches of each dataset into `train` / `test` chunk files of `chunk_size` events, weighting them as they are filled
 4. **validation** — produce summary plots comparing signal and background distributions
-5. **preprocess\_torch** — convert each chunk into a pre-built `.pt` tensor file
 
 Stage 3 reads each event once and writes it once. It pulls one row group at a
 time from the batches, assigns each event to train or test, and appends it to
@@ -47,7 +40,6 @@ Final outputs land in `output_dir` (configured in `ntupelizer/config/workflow.ya
 <output_dir>/
   z_train_00000.parquet  # signal train (weighted), <= chunk_size events
   z_train_00001.parquet  # ... as many files as the split needs
-  z_train_00000.pt       # pre-built tensors for z_train_00000.parquet
   z_test_00000.parquet   # signal test  (weighted)
   qq_train_00000.parquet # background train (weighted)
   qq_test_00000.parquet  # background test  (weighted)
@@ -88,19 +80,45 @@ Note: Input simulation files can be generated using the scripts in the `sim/` di
 
 ## Setup
 
-Create a virtual environment and install the package with all dependencies:
+```bash
+git clone https://github.com/HEP-KBFI/ml-tau-data
+cd ml-tau-data
+git submodule update --init --recursive
+```
+
+There are two environments, and the distinction matters:
+
+- **The driver environment** — an ordinary virtualenv on the cluster login node
+  holding Snakemake and nothing heavy. This is what you activate, and the only
+  thing you install.
+- **The Apptainer container** — holds the scientific stack (uproot, awkward,
+  vector, fastjet, numba, torch). Every rule enters it for the actual
+  processing. You never install into it, and you do not activate it yourself.
+
+So the driver venv needs only the core dependencies:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install -e ".[full]"
+pip install -e .
 ```
 
-> **Note:** Snakemake 7.x is required. If you see `AttributeError: module 'pulp' has no attribute 'list_solvers'`, your `pulp` version is incompatible. Fix with:
-> ```bash
-> pip install "snakemake>=7,<8" "pulp>=2.7,<2.8"
-> ```
+Use `pip install -e ".[full]"` instead only if you also want to run the
+ntupelizer scripts by hand on the host, outside the container.
+
+> **Use Python 3.9–3.11.** Snakemake 7 parses the Snakefile with Python's own
+> tokeniser, and Python 3.12 changed how f-strings are tokenised (PEP 701). On
+> 3.12+ the Snakefile fails to parse with a misleading
+> `NameError: name 'dataset' is not defined` (verified on 3.14; 3.11 and the
+> cluster's 3.9 are fine). Upgrading Snakemake is not a way out: 8.x replaced
+> the `cluster:`/`cluster-status:` profile interface with executor plugins, so
+> the SLURM profile here requires 7.x.
+
+> **pulp must stay below 2.8.** Snakemake 7 calls `pulp.list_solvers()`, which
+> pulp renamed in 2.8, so a newer pulp makes even `snakemake --help` die with
+> `AttributeError: module 'pulp' has no attribute 'list_solvers'`. `setup.py`
+> pins this; the note is here in case you install Snakemake by hand.
 
 ## Configuration
 
@@ -108,52 +126,131 @@ Edit `ntupelizer/config/workflow.yaml` before running:
 
 ```yaml
 output_dir: /path/to/output          # where final Parquets are written
-temp_dir:   /path/to/tmp             # scratch space for per-file Parquets
-chunk_size: 100000                   # max events per output Parquet file
+temp_dir:   /path/to/tmp             # per-batch Parquets; kept, not scratch
+chunk_size: 100000                   # max jets per output Parquet file
+row_group_size: 1024                 # rows per parquet row group
+split_seed: 12345                    # makes the train/test split reproducible
+files_per_job: 20                    # ROOT files per SLURM job in stage 1
 
 ntupelizer_class: DecayProductNtupelizer   # adds the gen_jet_tau_vis_daughter_* fields
 
 datasets:
   p8_ee_Z_tautau_ecm91:
-    input_dir: /path/to/signal/root/
+    input_dir: /path/to/signal/root/   # or: file_list: /path/to/list.txt
     file_pattern: "*.root"
     short_name: z
     is_signal: true
-    train_frac: 0.70
+    train_frac: 0.90
 
   p8_ee_Z_qq_ecm91:
     input_dir: /path/to/bkg/root/
     file_pattern: "*.root"
     short_name: qq
     is_signal: false
-    train_frac: 0.70
+    train_frac: 0.90
 
 weights:
   produce_plots: true
-  add_weights: true
+  n_files_per_sample: 100000
 ```
+
+Exactly one dataset must have `is_signal: true` and one `is_signal: false`; the
+weighting stage compares the two.
+
+Inputs are discovered either by globbing `input_dir` with `file_pattern`, or from
+a `file_list` text file with one path per line. `file_list` takes priority.
+Glob results are cached under `.snakemake_file_lists/`, so delete that directory
+after adding input files; `file_list` bypasses the cache entirely.
+
+`split_seed` seeds the train/test assignment and the in-buffer shuffle, so a
+rerun over the same inputs with the same `chunk_size` and `train_frac` reproduces
+the output byte for byte. Change any of those three and the split is redrawn.
 
 `ntupelizer_class` selects what the ntuples contain: `PodioROOTNtuplelizer` for the
 standard jet-level ntuples, or `DecayProductNtupelizer` for the ParTauDETR
 (tau daughter) dataset, which additionally fills `gen_jet_tau_vis_daughter_p4s`,
 `gen_jet_tau_vis_daughter_pdgs` and `gen_jet_tau_vis_daughter_charges` per gen jet.
 
-Ntupelizer parameters (collections, branches, lifetime variables) are in `ntupelizer/config/ntupelizer_base/new.yaml`.
+Ntupelizer parameters (input collections, branch list, lifetime variables) are in
+`ntupelizer/config/podio_root_ntupelizer.yaml` — that is the file `ntupelize.py`
+loads. Note that `ntupelizer/config/ntupelizer.yaml` and
+`ntupelizer/config/ntupelizer_base/` are unused legacy configs; `new.yaml` there
+is a stale duplicate of the branch list and editing it has no effect.
 
 ## Running the workflow
 
-**With SLURM** (ntupelize stage runs on the cluster; everything else runs locally):
+On the cluster the whole pipeline is one command:
 
 ```bash
+source .venv/bin/activate
 snakemake --profile ntupelizer/config/slurm
 ```
 
-SLURM jobs are submitted to partition `main9`. Each group of 20 ntupelize jobs shares one `sbatch` allocation. Logs are written to `logs/slurm/`.
+That is the entire operation. Snakemake works backwards from `rule all`, figures
+out what is missing and drives it to completion on its own: stage 1 goes to
+SLURM as one `sbatch` per batch of `files_per_job` ROOT files, and stages 2–4
+run on the login node (they are declared `localrules`, being cheap next to the
+ntupelization). Every job enters the container by itself, so there is nothing
+else to load or activate.
 
-**Locally** (all stages on the current machine):
+The driver process must stay alive for the whole run, so start it inside `tmux`
+or `screen` on the login node.
+
+Dry-run first — it costs seconds and shows the whole plan:
+
+```bash
+snakemake --profile ntupelizer/config/slurm -n      # what would run
+snakemake --profile ntupelizer/config/slurm -n -p   # ... and the exact commands
+```
+
+The profile in `ntupelizer/config/slurm/config.yaml` submits to partition `main`
+with `--mem` and `--time` taken from each rule's `resources:`, retries a failed
+job once (`restart-times: 1`), sets no ceiling on concurrent jobs
+(`jobs: unlimited`), and polls job state through
+`ntupelizer/scripts/slurm_status.py` rather than by parsing `sbatch` output.
+Logs land in `logs/slurm/<rule>_<wildcards>_<jobid>.{out,err}`.
+
+**Without SLURM**, everything on the current machine:
 
 ```bash
 snakemake -j12    # 12 parallel jobs
+```
+
+### Resuming and re-running
+
+Re-running the same command resumes: anything whose output already exists is
+skipped. Since the per-batch Parquets under `temp_dir` are kept rather than
+deleted, an interrupted run picks up at the batch it died on, and stages 2–4 can
+be replayed without touching stage 1 at all.
+
+```bash
+# after a crash or Ctrl-C, Snakemake leaves the directory locked
+snakemake --unlock
+
+# redo the merge/split of one dataset (e.g. after changing chunk_size):
+rm <output_dir>/.markers/z_train.chunks <output_dir>/.markers/z_test.chunks
+snakemake --profile ntupelizer/config/slurm
+
+# force one rule to re-run regardless of timestamps
+snakemake --profile ntupelizer/config/slurm -R compute_weights
+
+# build one target only
+snakemake --profile ntupelizer/config/slurm <output_dir>/weights/sig_weights.npy
+```
+
+Deleting an individual chunk `.parquet` does *not* trigger a rebuild — the merge
+stage declares marker files, not chunks (see above), so delete the marker.
+
+### Test runs on a subset
+
+`ntupelizer/config/workflow_test.yaml` runs the same pipeline over a slice of the
+inputs, using the `file_list` input mode and its own `output_dir`/`temp_dir` so
+it cannot collide with a production run. Build the lists as described in that
+file's header, then:
+
+```bash
+snakemake --configfile ntupelizer/config/workflow_test.yaml -n
+snakemake --configfile ntupelizer/config/workflow_test.yaml --profile ntupelizer/config/slurm
 ```
 
 ## ALEPH data
@@ -199,20 +296,28 @@ reporting success if the row count in does not match the row count out. Pass
 ## Repository structure
 
 ```
-Snakefile                          # workflow definition (all five stages)
+Snakefile                          # config, includes and `rule all` only
+rules/                             # one file per stage, included by the Snakefile
+  common.smk                       # shared config, derived constants, path helpers
+  ntupelize.smk                    # stage 1
+  weights.smk                      # stage 2
+  merge_split.smk                  # stage 3 (one rule generated per dataset)
+  validation.smk                   # stage 4
 ntupelizer/
   config/
     workflow.yaml                  # dataset paths, output dirs, weight settings
-    ntupelizer.yaml                # selects ntupelizer variant (new/old)
-    ntupelizer_base/new.yaml       # EDM4HEP/PodioROOT ntupelizer config
+    workflow_test.yaml             # same, for a subset test run
+    podio_root_ntupelizer.yaml     # EDM4HEP/PodioROOT ntupelizer config (Hydra)
+    weighting.yaml                 # (p, theta) binning for the weight matrices
     slurm/config.yaml              # Snakemake SLURM profile
+    slurm/jobscript.sh             # cluster jobscript template
   scripts/
     ntupelize.py                   # stage 1 entry point (Hydra)
+    concat_batch.py                # stage 1: concatenate one batch's per-file parquets
     merge_files.py                 # stage 3 entry point (merge/split/weight/chunk)
     compute_weights.py             # stage 2
     apply_weights.py               # standalone: re-weight existing chunks
     validate_ntuples.py            # stage 4
-    preprocess_torch.py            # stage 5
     slurm_status.py                # Snakemake cluster-status helper
   aleph/                           # standalone ALEPH pipeline (see above)
     scripts/ntupelize_all.py       # writes the per-chunk SLURM job scripts
@@ -269,4 +374,19 @@ All heavy processing runs inside an Apptainer container:
 /home/software/singularity/pytorch.simg:2025-09-01
 ```
 
-The container is invoked automatically by Snakemake. No manual setup is needed.
+No manual setup is needed, but it is worth knowing how it is wired, because it is
+not Snakemake's built-in container support. There is no `container:` directive
+and no `--use-singularity`: `rules/common.smk` builds an `apptainer exec …`
+command prefix once, passes it to each rule as `params.container`, and every rule
+prefixes its command with it by hand. The container is therefore entered per
+*command*, not per job, and Snakemake itself is unaware of it.
+
+On the cluster that makes three layers: `sbatch` runs the jobscript on the host,
+the jobscript re-invokes Snakemake in worker mode for that one target, and the
+rule's shell block then calls `apptainer exec python …`. This is why the driver
+venv lives on the host and needs only Snakemake, while the scientific stack only
+ever has to exist inside the image.
+
+`run.sh` in the repository root is a separate manual wrapper around the same
+image, used only by the ALEPH job scripts. The Snakemake workflow does not use
+it, and the two set different bind mounts.
