@@ -117,6 +117,9 @@ class GenTauInfoMatcher:
             raw_daughter_pdgs = [
                 event["MCParticles.PDG"][d_idx] for d_idx in tau_daughters[tau_idx]
             ]
+            # Representative ids (charged hadron -> 211, neutral hadron -> 130).
+            # Only used for the daughter-PDG record; the decay mode is taken
+            # from the raw ids, which tau_decaymode classifies by property.
             pdgs = [self.map_pdgid_to_candid(pdg_id) for pdg_id in raw_daughter_pdgs]
             tau_vis_p4 = g.DUMMY_P4_VECTOR
             for tc in tau_daughters[tau_idx]:
@@ -124,7 +127,7 @@ class GenTauInfoMatcher:
                 if abs(event["MCParticles.PDG"][tc]) not in [12, 14, 16]:
                     tau_vis_p4 = tau_vis_p4 + daughter_p4
             tau_vis_p4s.append(tau_vis_p4)
-            tau_decay_modes.append(dm.get_decaymode(pdgs))
+            tau_decay_modes.append(dm.classify_decay_mode(raw_daughter_pdgs))
             daughter_pdgs.append(pdgs)
         tau_vis_p4s = g.reinitialize_p4(ak.Array(tau_vis_p4s))
         tau_info = {
@@ -172,8 +175,22 @@ class GenTauInfoMatcher:
             if self.debug:
                 print("---------")
                 print("Event no.: ", event_idx)
+            gen_status = event["MCParticles.generatorStatus"]
             for tau_idx in tau_indices:
                 daughter_indices = d_idx[d_begin[tau_idx] : d_end[tau_idx]]
+                # Drop generatorStatus == 0 daughters.  Those were created by the
+                # simulation, not by the generator: DD4hep hangs delta rays that
+                # the tau knocks out of the beam pipe / vertex detector off the
+                # tau in the daughter relation, and they are indistinguishable
+                # from decay products here.  Left in they break charge
+                # conservation (the tau's daughter charges no longer sum to the
+                # tau charge), add themselves to the visible p4, and put a bogus
+                # entry in gen_jet_tau_vis_daughter_*.  Status 2 daughters are
+                # kept: those are real, generator-level intermediate states such
+                # as K0 or eta.
+                daughter_indices = daughter_indices[
+                    np.asarray(gen_status[daughter_indices]) != 0
+                ]
                 if self.debug:
                     print("Tau_idx: ", tau_idx)
                     print(event["MCParticles.PDG"][daughter_indices])

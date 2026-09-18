@@ -40,9 +40,13 @@ from docopt import docopt
 
 
 def get_decay_mode_id(daughter_pdgs):
-    # keys = np.unique(ak.flatten(abs(arr.gen_jet_tau_vis_daughter_pdgs)))
+    # Species that take part in the matching.  Photons are deliberately NOT
+    # counted: a radiative decay (gamma pi0 pi) is the same channel as its
+    # parent (pi0 pi), which is how PDG treats tau radiative modes and how
+    # tau_decaymode.classify_decay_mode labels gen_jet_tau_decaymode.  Counting
+    # the photon would make every radiative decay miss all twelve rows below and
+    # fall into "other".
     keys = [
-        22,
         111,
         130,
         211,
@@ -52,10 +56,9 @@ def get_decay_mode_id(daughter_pdgs):
         311,
         321,
         323,
-    ]  # Should get the same result as above, but this is just a failsafe.
+    ]
 
-    # The 12 most common tau decays, in descending branching fraction, stopping
-    # just before the first mode with a photon in it (gamma pi0 pi, ~2.8e-3).
+    # The 12 most common hadronic tau decays, in descending branching fraction.
     # The class id is therefore the frequency rank.
     #
     # Note which kaon code each row wants.  The neutral kaon from a tau decay is
@@ -66,24 +69,24 @@ def get_decay_mode_id(daughter_pdgs):
     # charged tau), and 6 and 10 looked for the wrong neutral kaon code.
     targets = ak.Array(
         [
-            # 22 111 130 211 221 223 310 311 321 323
-            [0, 1, 0, 1, 0, 0, 0, 0, 0, 0],  # 0: pi + pi0
-            [0, 0, 0, 1, 0, 0, 0, 0, 0, 0],  # 1: pi
-            [0, 0, 0, 3, 0, 0, 0, 0, 0, 0],  # 2: 3pi
-            [0, 2, 0, 1, 0, 0, 0, 0, 0, 0],  # 3: pi + 2pi0
-            [0, 1, 0, 3, 0, 0, 0, 0, 0, 0],  # 4: 3pi + pi0
-            [0, 3, 0, 1, 0, 0, 0, 0, 0, 0],  # 5: pi + 3pi0
-            [0, 0, 0, 1, 0, 0, 0, 1, 0, 0],  # 6: pi + K0
-            [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],  # 7: K
-            [0, 2, 0, 3, 0, 0, 0, 0, 0, 0],  # 8: 3pi + 2pi0
-            [0, 1, 0, 0, 0, 0, 0, 0, 1, 0],  # 9: K + pi0
-            [0, 1, 0, 1, 0, 0, 0, 1, 0, 0],  # 10: pi + pi0 + K0
-            [0, 0, 0, 2, 0, 0, 0, 0, 1, 0],  # 11: 2pi + K
+            # 111 130 211 221 223 310 311 321 323
+            [1, 0, 1, 0, 0, 0, 0, 0, 0],  # 0: pi + pi0
+            [0, 0, 1, 0, 0, 0, 0, 0, 0],  # 1: pi
+            [0, 0, 3, 0, 0, 0, 0, 0, 0],  # 2: 3pi
+            [2, 0, 1, 0, 0, 0, 0, 0, 0],  # 3: pi + 2pi0
+            [1, 0, 3, 0, 0, 0, 0, 0, 0],  # 4: 3pi + pi0
+            [3, 0, 1, 0, 0, 0, 0, 0, 0],  # 5: pi + 3pi0
+            [0, 0, 1, 0, 0, 0, 1, 0, 0],  # 6: pi + K0
+            [0, 0, 0, 0, 0, 0, 0, 1, 0],  # 7: K
+            [2, 0, 3, 0, 0, 0, 0, 0, 0],  # 8: 3pi + 2pi0
+            [1, 0, 0, 0, 0, 0, 0, 1, 0],  # 9: K + pi0
+            [1, 0, 1, 0, 0, 0, 1, 0, 0],  # 10: pi + pi0 + K0
+            [0, 0, 2, 0, 0, 0, 0, 1, 0],  # 11: 2pi + K
         ]
     )
 
     counts = ak.zip({f"n_{k}": ak.sum(abs(daughter_pdgs) == k, axis=1) for k in keys})
-    signature = ak.zeros_like(counts.n_22)
+    signature = ak.zeros_like(counts[f"n_{keys[0]}"])
     for k in keys:
         signature = signature * 10 + counts[f"n_{k}"]
 

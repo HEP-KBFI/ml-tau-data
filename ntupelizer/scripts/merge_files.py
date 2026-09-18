@@ -158,6 +158,11 @@ WANTED_COLUMNS = [
     "gen_jet_tau_vis_energy",  # == gen_jet_tau_p4.energy, carried for convenience
     "gen_jet_tau_decaymode",  # tau decay mode
     "gen_jet_tau_charge",
+    # tau decay vertex: the tau's MCParticles.endpoint, an absolute position.
+    # Subtract the primary vertex to get a displacement.
+    "gen_jet_tau_DV_x",
+    "gen_jet_tau_DV_y",
+    "gen_jet_tau_DV_z",
     # tau daughter info (only present with DecayProductNtupelizer)
     "gen_jet_tau_vis_daughter_p4s",
     "gen_jet_tau_vis_daughter_pdgs",

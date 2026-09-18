@@ -285,9 +285,9 @@ against the twelve most common tau decays; anything else is labelled 15
 ("other"). Background (`qq`) files are skipped, since only the signal sample has
 a meaningful gen-level decay mode.
 
-The twelve targets are the most common modes in descending branching fraction,
-stopping just before the first mode containing a photon (`γ π⁰ π`, 2.8e-3), so
-the class id is the frequency rank. Fractions measured on 200k signal jets:
+The twelve targets are the most common hadronic modes in descending branching
+fraction, so the class id is the frequency rank. Fractions measured on 200k
+signal jets, before radiative decays were folded in (see below):
 
 | class | decay mode | fraction |
 |------:|------------|---------:|
@@ -308,8 +308,15 @@ the class id is the frequency rank. Fractions measured on 200k signal jets:
 Together the twelve cover 97.8% of signal jets. Note the PDG codes the matcher
 expects: the neutral kaon is **311** (`K⁰`) in this sample, not 310 (`K⁰_S`) —
 5309 vs 503 daughters over those 200k jets — and the single-kaon modes are the
-charged kaon, **321**. A photon among the visible daughters vetoes every class,
-so radiative decays land in "other" by design; `γ π⁰ π` alone is 2.8e-3.
+charged kaon, **321**.
+
+Photons are not counted, so a radiative decay is classed with its parent:
+`γ π⁰ π` is class 0, the same as `π⁰ π`. This is how PDG treats tau radiative
+modes (indented sub-modes of the parent channel, defined only relative to a
+photon energy cutoff) and how `gen_jet_tau_decaymode` is labelled, so the two
+labels agree on these jets. Radiative decays are 0.28% of signal jets, nearly
+all `γ π⁰ π`; folding them in moves that 0.28% from "other" into class 0
+relative to the table above.
 
 Leptonic taus never appear: the ntupelizer drops `gen_jet_tau_decaymode == 16`
 before these files are written, which is also why the script's electron-daughter
