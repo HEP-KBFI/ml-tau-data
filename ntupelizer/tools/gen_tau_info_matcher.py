@@ -43,15 +43,27 @@ class GenTauInfoMatcher:
             "tau_charge",
             "tau_daughter_PDG",
         ]
+        # The numeric fill values are floats on purpose.  A Python int here would
+        # be a different dtype from the real (float) values, so a file in which
+        # nothing matched would write int64 columns while every other file writes
+        # float64 -- and the per-batch ParquetWriter in the Snakefile fixes its
+        # schema from the first file it reads, so one such file aborts the batch.
+        # tau_decaymode stays an int because its real values are ints too.
         self.fill_values = {
-            "tau_vis_energy": 0,
+            "tau_vis_energy": 0.0,
             "tau_decaymode": -1,
-            "tau_charge": -999,
-            "tau_full_p4": g.DUMMY_P4_VECTOR,
-            "tau_p4": g.DUMMY_P4_VECTOR,  # This is the visible p4
-            "tau_DV_x": -1,
-            "tau_DV_y": -1,
-            "tau_DV_z": -1,
+            "tau_charge": -999.0,
+            # The dummy must be in exactly the schema `reinitialize_p4` returns
+            # (vector's rho/phi/eta/t field names), because these fill values sit
+            # in the same array as the real tau p4s.  A literal
+            # {pt, eta, phi, energy} record -- or DUMMY_P4_VECTOR's
+            # {mass, x, y, z} -- merges into a union instead, leaving the matched
+            # taus with a null `pt` and the unmatched jets with a null `rho`.
+            "tau_full_p4": g.DUMMY_P4_STANDARD,
+            "tau_p4": g.DUMMY_P4_STANDARD,  # This is the visible p4
+            "tau_DV_x": -1.0,
+            "tau_DV_y": -1.0,
+            "tau_DV_z": -1.0,
         }
 
     def map_pdgid_to_candid(self, pdg_id):
@@ -101,17 +113,21 @@ class GenTauInfoMatcher:
         tau_vis_p4s = []
         daughter_pdgs = []
         for tau_idx in range(n_taus):
-            daughter_pdgs = [
+            # Use a different name so the outer `daughter_pdgs` accumulator is not shadowed
+            raw_daughter_pdgs = [
                 event["MCParticles.PDG"][d_idx] for d_idx in tau_daughters[tau_idx]
             ]
-            pdgs = [self.map_pdgid_to_candid(pdg_id) for pdg_id in daughter_pdgs]
+            # Representative ids (charged hadron -> 211, neutral hadron -> 130).
+            # Only used for the daughter-PDG record; the decay mode is taken
+            # from the raw ids, which tau_decaymode classifies by property.
+            pdgs = [self.map_pdgid_to_candid(pdg_id) for pdg_id in raw_daughter_pdgs]
             tau_vis_p4 = g.DUMMY_P4_VECTOR
             for tc in tau_daughters[tau_idx]:
                 daughter_p4 = event_particle_p4s[tc]
                 if abs(event["MCParticles.PDG"][tc]) not in [12, 14, 16]:
                     tau_vis_p4 = tau_vis_p4 + daughter_p4
             tau_vis_p4s.append(tau_vis_p4)
-            tau_decay_modes.append(dm.get_decaymode(pdgs))
+            tau_decay_modes.append(dm.classify_decay_mode(raw_daughter_pdgs))
             daughter_pdgs.append(pdgs)
         tau_vis_p4s = g.reinitialize_p4(ak.Array(tau_vis_p4s))
         tau_info = {
@@ -135,9 +151,11 @@ class GenTauInfoMatcher:
         tau_general_info["tau_DV_z"] = [
             event["MCParticles.endpoint.z"][tau_idx] for tau_idx in tau_indices
         ]
-        tau_general_info["tau_full_p4"] = [
-            event_particle_p4s[tau_idx] for tau_idx in tau_indices
-        ]
+        full_p4_list = [event_particle_p4s[tau_idx] for tau_idx in tau_indices]
+        if len(full_p4_list) > 0:
+            tau_general_info["tau_full_p4"] = g.reinitialize_p4(ak.Array(full_p4_list))
+        else:
+            tau_general_info["tau_full_p4"] = ak.Array(full_p4_list)
         tau_general_info["tau_charge"] = [
             pdgid.charge(event["MCParticles.PDG"][tau_idx]) for tau_idx in tau_indices
         ]
@@ -157,8 +175,22 @@ class GenTauInfoMatcher:
             if self.debug:
                 print("---------")
                 print("Event no.: ", event_idx)
+            gen_status = event["MCParticles.generatorStatus"]
             for tau_idx in tau_indices:
                 daughter_indices = d_idx[d_begin[tau_idx] : d_end[tau_idx]]
+                # Drop generatorStatus == 0 daughters.  Those were created by the
+                # simulation, not by the generator: DD4hep hangs delta rays that
+                # the tau knocks out of the beam pipe / vertex detector off the
+                # tau in the daughter relation, and they are indistinguishable
+                # from decay products here.  Left in they break charge
+                # conservation (the tau's daughter charges no longer sum to the
+                # tau charge), add themselves to the visible p4, and put a bogus
+                # entry in gen_jet_tau_vis_daughter_*.  Status 2 daughters are
+                # kept: those are real, generator-level intermediate states such
+                # as K0 or eta.
+                daughter_indices = daughter_indices[
+                    np.asarray(gen_status[daughter_indices]) != 0
+                ]
                 if self.debug:
                     print("Tau_idx: ", tau_idx)
                     print(event["MCParticles.PDG"][daughter_indices])
@@ -207,13 +239,23 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
       - gen_jet_tau_vis_daughter_charges: float charge
     """
 
-    def __init__(self, arrays, gen_jets, idx_map_branch="idx_mc", debug=False):
+    INTERMEDIATE_MESON_PDGS = frozenset({221, 223, 323})
+
+    def __init__(
+        self,
+        arrays,
+        gen_jets,
+        idx_map_branch="idx_mc",
+        debug=False,
+        replace_intermediate_mesons=False,
+    ):
         super().__init__(
             arrays=arrays,
             gen_jets=gen_jets,
             idx_map_branch=idx_map_branch,
             debug=debug,
         )
+        self.replace_intermediate_mesons = replace_intermediate_mesons
         self.properties += [
             "tau_vis_daughter_p4s",
             "tau_vis_daughter_pdgs",
@@ -221,15 +263,54 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
         ]
         self.fill_values.update(
             {
-                "tau_vis_daughter_p4s": [],
-                "tau_vis_daughter_pdgs": [],
-                "tau_vis_daughter_charges": [],
+                "tau_vis_daughter_p4s": ak.Array(
+                    [{"pt": 0.0, "eta": 0.0, "phi": 0.0, "energy": 0.0}]
+                )[:0],
+                "tau_vis_daughter_pdgs": ak.Array([0])[:0],
+                "tau_vis_daughter_charges": ak.Array([0.0])[:0],
             }
         )
+
+    def replace_mesons_with_daughters(self, tau_daughters, event):
+        relation_indices = event["_MCParticles_daughters.index"]
+        daughter_begin = event["MCParticles.daughters_begin"]
+        daughter_end = event["MCParticles.daughters_end"]
+        expanded_tau_daughters = []
+
+        for daughters in tau_daughters:
+            expanded_daughters = []
+            for daughter_idx in daughters:
+                daughter_idx = int(daughter_idx)
+                daughter_pdg = int(event["MCParticles.PDG"][daughter_idx])
+                if abs(daughter_pdg) in self.INTERMEDIATE_MESON_PDGS:
+                    immediate_daughters = [
+                        int(idx)
+                        for idx in relation_indices[
+                            daughter_begin[daughter_idx] : daughter_end[daughter_idx]
+                        ]
+                    ]
+                    is_eta_to_two_photons = abs(daughter_pdg) == 221 and len(
+                        immediate_daughters
+                    ) == 2 and all(
+                        abs(int(event["MCParticles.PDG"][idx])) == 22
+                        for idx in immediate_daughters
+                    )
+                    if is_eta_to_two_photons:
+                        expanded_daughters.append(daughter_idx)
+                    else:
+                        expanded_daughters.extend(immediate_daughters)
+                else:
+                    expanded_daughters.append(daughter_idx)
+            expanded_tau_daughters.append(expanded_daughters)
+
+        return expanded_tau_daughters
 
     def retrieve_tau_info_from_daughters(
         self, tau_daughters, n_taus, event, event_particle_p4s
     ):
+        if self.replace_intermediate_mesons:
+            tau_daughters = self.replace_mesons_with_daughters(tau_daughters, event)
+
         # Get the parent dict (decaymode, tau_p4, tau_daughter_PDG, tau_vis_energy)
         tau_info = super().retrieve_tau_info_from_daughters(
             tau_daughters, n_taus, event, event_particle_p4s
@@ -269,12 +350,21 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
                         "energy": energy_list,
                     }
                 )
+                daughter_pdgs = ak.Array(pdg_list)
+                daughter_charges = ak.Array(charge_list)
             else:
-                daughter_p4s = ak.Array([])
+                # Keep the daughter collections typed even when empty, so that
+                # downstream code reading e.g. daughter_p4["pt"] works on an empty
+                # list instead of hitting an `unknown`-type array with no fields.
+                daughter_p4s = ak.Array(
+                    [{"pt": 0.0, "eta": 0.0, "phi": 0.0, "energy": 0.0}]
+                )[:0]
+                daughter_pdgs = ak.Array([0])[:0]
+                daughter_charges = ak.Array([0.0])[:0]
 
             all_daughter_p4s.append(daughter_p4s)
-            all_daughter_pdgs.append(pdg_list)
-            all_daughter_charges.append(charge_list)
+            all_daughter_pdgs.append(daughter_pdgs)
+            all_daughter_charges.append(daughter_charges)
 
         tau_info["tau_vis_daughter_p4s"] = ak.Array(all_daughter_p4s)
         tau_info["tau_vis_daughter_pdgs"] = ak.Array(all_daughter_pdgs)

@@ -1,21 +1,21 @@
-import os
 import glob
+import multiprocessing
+import os
+from itertools import repeat
+
+import awkward as ak
+import general as g
 import hydra
 import matplotlib
-import numpy as np
-import mplhep as hep
-import awkward as ak
-import seaborn as sns
-import multiprocessing
 import matplotlib as mpl
-from itertools import repeat
 import matplotlib.pyplot as plt
-from omegaconf import DictConfig
+import mplhep as hep
+import numpy as np
+import seaborn as sns
 from general import load_all_data
 from matplotlib import ticker
 from matplotlib.ticker import AutoLocator
-
-import general as g
+from omegaconf import DictConfig
 
 hep.style.use(hep.styles.CMS)
 matplotlib.use("Agg")
@@ -108,24 +108,42 @@ def get_weight_matrix(target_matrix, comp_matrix):
     return np.nan_to_num(weights, nan=0.0)
 
 
-def get_weights(data, weight_matrix, theta_bin_edges, p_bin_edges):
+def gen_jet_theta_p(data):
+    """Return (theta in degrees, p) of the gen jets of an ntuple array.
+
+    Goes through reinitialize_p4, so it accepts gen_jet_p4 both in the
+    {energy, x, y, z} form written by the ntupelizer and in the
+    {pt, eta, phi, energy} form written by the merge stage.
+    """
     p4s = g.reinitialize_p4(data.gen_jet_p4)
-    theta_values = np.rad2deg(p4s.theta.to_numpy())
-    p_values = p4s.p.to_numpy()
-    theta_bin = (
-        np.digitize(theta_values, bins=(theta_bin_edges[1:] + theta_bin_edges[:-1]) / 2)
-        - 1
+    return np.rad2deg(p4s.theta.to_numpy()), p4s.p.to_numpy()
+
+
+def lookup_weights(theta_values, p_values, weight_matrix, theta_bin_edges, p_bin_edges):
+    """Look up the per-jet weight of each (theta, p) pair in a weight matrix.
+
+    Values outside the binned range are clipped into the edge bins.
+    """
+    n_theta, n_p = weight_matrix.shape
+    theta_bin = np.clip(
+        np.digitize(theta_values, (theta_bin_edges[1:] + theta_bin_edges[:-1]) / 2) - 1,
+        0,
+        n_theta - 1,
     )
-    p_bin = np.digitize(p_values, bins=(p_bin_edges[1:] + p_bin_edges[:-1]) / 2) - 1
-    n_theta = weight_matrix.shape[0]
-    n_p = weight_matrix.shape[1]
-    theta_bin = np.clip(theta_bin, 0, n_theta - 1)
-    p_bin = np.clip(p_bin, 0, n_p - 1)
-    matrix_loc = np.concatenate(
-        [theta_bin.reshape(-1, 1), p_bin.reshape(-1, 1)], axis=1
+    p_bin = np.clip(
+        np.digitize(p_values, (p_bin_edges[1:] + p_bin_edges[:-1]) / 2) - 1,
+        0,
+        n_p - 1,
     )
-    weights = ak.from_iter([weight_matrix[tuple(loc)] for loc in matrix_loc])
-    return weights
+    return weight_matrix[theta_bin, p_bin]
+
+
+def get_weights(data, weight_matrix, theta_bin_edges, p_bin_edges):
+    """Per-jet weights for an ntuple array, from its gen jet (theta, p)."""
+    theta_values, p_values = gen_jet_theta_p(data)
+    return lookup_weights(
+        theta_values, p_values, weight_matrix, theta_bin_edges, p_bin_edges
+    )
 
 
 def process_single_file(input_path, weight_matrix, theta_bin_edges, p_bin_edges, cfg):
@@ -135,7 +153,12 @@ def process_single_file(input_path, weight_matrix, theta_bin_edges, p_bin_edges,
         merged_info = {field: data[field] for field in data.fields}
         merged_info.update({"weight": weights})
         print(f"Adding weights to {input_path}")
-        ak.to_parquet(ak.Record(merged_info), input_path)
+        ak.to_parquet(
+            ak.Array(merged_info),
+            input_path,
+            compression="zstd",
+            compression_level=6,
+        )
     return weights
 
 

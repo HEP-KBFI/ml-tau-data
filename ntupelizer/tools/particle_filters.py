@@ -1,5 +1,6 @@
-import vector
 import awkward as ak
+import vector
+
 from ntupelizer.tools import general as g
 
 
@@ -65,4 +66,4 @@ class RecoParticleFilter(ParticleFilter):
         super().__init__(arrays=arrays, p_type=p_type)
 
     def _filter_particles(self):
-        return self.particles, self.particles_p4
+        return self.particles, g.reinitialize_p4(self.particles_p4)

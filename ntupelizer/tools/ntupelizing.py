@@ -37,20 +37,25 @@ class EDM4HEPNtupelizer:
         raise NotImplementedError("Please implement input loader for your subclass")
 
     def retrieve_dummy_tau_values(self, gen_jets):
-        filler = g.reinitialize_p4(ak.zeros_like(gen_jets))
+        # `ak.without_parameters` drops vector's Momentum4D record parameter.  The
+        # signal p4s lose it anyway on their way through get_matched_gen_tau_property,
+        # so keeping it here would make signal and background concatenate into a
+        # union of two otherwise identical record types.
+        filler = ak.without_parameters(g.reinitialize_p4(ak.zeros_like(gen_jets)))
         gen_jet_tau_info = {
             "gen_jet_tau_vis_energy": ak.zeros_like(gen_jets.eta),
             "gen_jet_tau_decaymode": ak.ones_like(gen_jets.eta) * -1,
             "gen_jet_tau_charge": ak.ones_like(gen_jets.eta) * -999,
-            "gen_jet_tau_full_p4": ak.zip(
-                {"rho": filler.rho, "phi": filler.phi, "eta": filler.eta, "t": filler.t}
-            ),
-            "gen_jet_tau_p4": ak.zip(
-                {"rho": filler.rho, "phi": filler.phi, "eta": filler.eta, "t": filler.t}
-            ),
-            "gen_jet_DV_x": ak.zeros_like(gen_jets.eta),
-            "gen_jet_DV_y": ak.zeros_like(gen_jets.eta),
-            "gen_jet_DV_z": ak.zeros_like(gen_jets.eta),
+            # `filler` is already in the standard schema, so it matches the signal
+            # p4s field-for-field.  Re-zipping it under {pt, eta, phi, energy}
+            # would rename vector's rho/t coordinates and make the background
+            # p4s unmergeable with the signal ones.
+            "gen_jet_tau_full_p4": filler,
+            "gen_jet_tau_p4": filler,
+            # Must match the signal key names produced by fill_tau_info: gen_jet_{tau_DV_x}
+            "gen_jet_tau_DV_x": ak.zeros_like(gen_jets.eta),
+            "gen_jet_tau_DV_y": ak.zeros_like(gen_jets.eta),
+            "gen_jet_tau_DV_z": ak.zeros_like(gen_jets.eta),
         }
         return gen_jet_tau_info
 
@@ -208,11 +213,16 @@ class EDM4HEPNtupelizer:
         # =====================================================================
         # Combine all variables into a single ak.Array (flattened per jet)
         # =====================================================================
+        # Standardise jet p4s to {pt, eta, phi, energy} so they are consistent
+        # with reco_cand_p4s and gen_jet_tau_p4 (which go through reinitialize_p4).
+        # FastJet returns jets in {energy, x, y, z} Cartesian form.
+        reco_jets_p4 = g.reinitialize_p4(reco_jets)
+        gen_jets_p4 = g.reinitialize_p4(gen_jets)
         combined_dict = {
             # Reco jet p4s
-            "reco_jet_p4": reco_jets,
+            "reco_jet_p4": reco_jets_p4,
             # Gen jet p4s
-            "gen_jet_p4": gen_jets,
+            "gen_jet_p4": gen_jets_p4,
             # Reco candidate p4s, pdgs and charges (jet constituents)
             "reco_cand_p4s": reco_cand_p4s,
             "reco_cand_pdgs": reco_cand_pdgs,
@@ -241,8 +251,17 @@ class EDM4HEPNtupelizer:
         if signal_sample:
             removal_mask = (data.gen_jet_tau_decaymode != -1) & removal_mask
         print(f"{np.sum(removal_mask)} jets after masking")
-        data = ak.Record({key: data[key][removal_mask] for key in data.fields})
-        ak.to_parquet(ak.Record(data), output_path)
+        # Keep data as ak.Array (not ak.Record) so that ak.from_parquet reads it
+        # back as an ak.Array and ak.concatenate works in the batch-merge step.
+        # ak.Record is a single-row wrapper; writing it to parquet produces a
+        # file that deserialises as a Record, not an Array, breaking concatenation.
+        data = ak.Array({key: data[key][removal_mask] for key in data.fields})
+        ak.to_parquet(
+            data,
+            output_path,
+            compression="zstd",
+            compression_level=6,
+        )
 
 
 class PodioROOTNtuplelizer(EDM4HEPNtupelizer):
@@ -293,11 +312,20 @@ class DecayProductNtupelizer(PodioROOTNtuplelizer):
 
     def retrieve_dummy_tau_values(self, gen_jets):
         info = super().retrieve_dummy_tau_values(gen_jets)
-        # Add empty jagged arrays for the three extra daughter properties
-        empty = ak.Array([[[] for _ in ev] for ev in gen_jets])
-        info["gen_jet_tau_vis_daughter_p4s"] = empty
-        info["gen_jet_tau_vis_daughter_pdgs"] = empty
-        info["gen_jet_tau_vis_daughter_charges"] = empty
+
+        # Add TYPED empty jagged arrays for the three extra daughter properties.
+        # Keeping the record/scalar type even when there are zero daughters means
+        # the downstream dataloader can read daughter_p4["pt"] on empty lists
+        # instead of failing on an `unknown`-type array with no fields.
+        def _empty_daughters(template):
+            one = ak.Array([[[template] for _ in ev] for ev in gen_jets])
+            return one[:, :, 0:0]
+
+        info["gen_jet_tau_vis_daughter_p4s"] = _empty_daughters(
+            {"pt": 0.0, "eta": 0.0, "phi": 0.0, "energy": 0.0}
+        )
+        info["gen_jet_tau_vis_daughter_pdgs"] = _empty_daughters(0)
+        info["gen_jet_tau_vis_daughter_charges"] = _empty_daughters(0.0)
         return info
 
     def retrieve_jet_tau_info(
@@ -305,7 +333,12 @@ class DecayProductNtupelizer(PodioROOTNtuplelizer):
     ):
         if signal_sample:
             matcher = gtim.GenTauInfoMatcherWithDaughters(
-                arrays=arrays, gen_jets=gen_jets, idx_map_branch=self.idx_map_branch
+                arrays=arrays,
+                gen_jets=gen_jets,
+                idx_map_branch=self.idx_map_branch,
+                replace_intermediate_mesons=self.cfg.get(
+                    "replace_intermediate_mesons", False
+                ),
             )
             jet_tau_info = matcher.fill_tau_info()
         else:
