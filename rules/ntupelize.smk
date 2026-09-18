@@ -15,9 +15,10 @@ rule ntupelize:
         # or train_frac, say — without re-ntupelizing thousands of ROOT files.
         f"{TEMP_DIR}/{{dataset}}/batch_{{batch_idx}}.parquet"
     params:
-        is_signal        = lambda wc: DATASETS[wc.dataset]["is_signal"],
-        ntupelizer_class = NTUPELIZER_CLASS,
-        container        = CONTAINER,
+        is_signal                   = lambda wc: DATASETS[wc.dataset]["is_signal"],
+        ntupelizer_class            = NTUPELIZER_CLASS,
+        replace_intermediate_mesons = config.get("replace_intermediate_mesons", True),
+        container                   = CONTAINER,
         # Temporary per-job directory for individual per-file parquets that
         # are concatenated into the single batch output at the end.
         per_file_tmp = lambda wc: f"{TEMP_DIR}/{wc.dataset}/.batch_{wc.batch_idx}_tmp",
@@ -48,6 +49,7 @@ rule ntupelize:
                     ++output_path="{params.per_file_tmp}/$stem.parquet" \
                     ++is_signal={params.is_signal} \
                     ++ntupelizer_class={params.ntupelizer_class} \
+                    ++replace_intermediate_mesons={params.replace_intermediate_mesons} \
                     hydra.run.dir=/tmp \
                     hydra.output_subdir=null \
                     hydra/job_logging=disabled; then
