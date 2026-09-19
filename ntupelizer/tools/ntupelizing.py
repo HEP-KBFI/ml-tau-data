@@ -337,7 +337,7 @@ class DecayProductNtupelizer(PodioROOTNtuplelizer):
                 gen_jets=gen_jets,
                 idx_map_branch=self.idx_map_branch,
                 replace_intermediate_mesons=self.cfg.get(
-                    "replace_intermediate_mesons", False
+                    "replace_intermediate_mesons", True
                 ),
             )
             jet_tau_info = matcher.fill_tau_info()
