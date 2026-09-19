@@ -17,10 +17,10 @@ jobs:
         python-version: ["3.10"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -32,11 +32,11 @@ jobs:
 
       - name: Run Pylint and save JSON
         run: |
-          pylint --rcfile=.pylintrc $(git ls-files '*.py') \
+          pylint --rcfile=.pylintrc "$(git ls-files '*.py')" \
             --output-format=json > pylint_output.json || true
 
       - name: Upload Pylint report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pylint-report
           path: pylint_output.json
@@ -112,14 +112,14 @@ jobs:
 
       - name: Post Pylint summary as PR comment
         if: github.event_name == 'pull_request'
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
             token: ${{ secrets.GITHUB_TOKEN }}
             issue-number: ${{ github.event.pull_request.number }}
             body-file: lint_summary.md
 
       - name: Run lint action
-        uses: wearerequired/lint-action@v2
+        uses: wearerequired/lint-action@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           pylint: true
