@@ -582,7 +582,9 @@ def plot_reco_jet_energy(
     reco_jet_en = reco_jet_en[valid]
 
     if bins is None:
-        en_max = max(gen_jet_en.max(), reco_jet_en.max())
+        en_max = max(
+            np.percentile(gen_jet_en, 99), np.percentile(reco_jet_en, 99)
+        )
         bins = np.linspace(0, en_max, 51)
 
     if ax is None:
