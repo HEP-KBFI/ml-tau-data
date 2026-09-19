@@ -278,6 +278,10 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
 
         def expand_daughter(daughter_idx):
             daughter_idx = int(daughter_idx)
+            if int(generator_status[daughter_idx]) == 0:
+                # Skip daughter particles whose generator status is 0.
+                # See fill_tau_info() for more information.
+                return []
             daughter_pdg = int(event["MCParticles.PDG"][daughter_idx])
             immediate_daughters = [
                 int(idx)
