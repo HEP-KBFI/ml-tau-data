@@ -10,8 +10,11 @@ track_collection: SiTracks_Refitted
 vertex_collection: PrimaryVertices
 idx_map_branch: idx_mc
 add_event_level_variables_per_jet: False
+keep_event_metadata: false # If true, record the input ROOT file's ID and event nrs
 include_lifetime_variables: true
 branches:
+    # Event metadata
+    - "EventHeader.eventNumber"
     # MC particles
     - "MCParticles.PDG"
     - "MCParticles.generatorStatus"
