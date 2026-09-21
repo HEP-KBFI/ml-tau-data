@@ -1,9 +1,9 @@
+import os.path
 from typing import Optional
 
 import awkward as ak
 import numpy as np
 import uproot
-import vector
 from omegaconf import DictConfig, OmegaConf
 from particle import pdgid
 
@@ -25,6 +25,7 @@ class EDM4HEPNtupelizer:
         self.mc_particles_collection = self.cfg.mc_particles_collection
         self.idx_map_branch = self.cfg.idx_map_branch
         self.include_lifetime_variables = self.cfg.include_lifetime_variables
+        self.keep_event_metadata = self.cfg.keep_event_metadata
         self.track_collection = self.cfg.track_collection
         self.vertex_collection = self.cfg.vertex_collection
         self.lifetime_vars = self.cfg.lifetime_vars
@@ -35,6 +36,16 @@ class EDM4HEPNtupelizer:
         self, path: str, tree_path: str = "events", branches: list = None
     ) -> ak.Array:
         raise NotImplementedError("Please implement input loader for your subclass")
+
+    @staticmethod
+    def _get_file_id(path: str) -> int:
+        # Maps /some/path/to/input/root/file_with_long_name_12345.root to integer 12345.
+        # Resolves to -1 if it's not possible to extract the integer from the file name.
+        filename = os.path.splitext(os.path.basename(path))[0]
+        try:
+            return int(filename.rsplit("_", 1)[-1])
+        except ValueError:
+            return -1
 
     def retrieve_dummy_tau_values(self, gen_jets):
         # `ak.without_parameters` drops vector's Momentum4D record parameter.  The
@@ -103,6 +114,11 @@ class EDM4HEPNtupelizer:
         signal_sample: bool = True,
     ):
         arrays = self._load_input_file(input_path)
+        if self.keep_event_metadata:
+            event_ids = ak.firsts(arrays["EventHeader.eventNumber"])
+            file_ids = ak.Array(
+                np.full(len(event_ids), self._get_file_id(input_path), dtype=np.int64)
+            )
         reco_particles, reco_particles_p4 = pfl.RecoParticleFilter(
             arrays=arrays, p_type=self.cfg.reco_particles_collection
         ).results
@@ -238,6 +254,16 @@ class EDM4HEPNtupelizer:
             "event_reco_cand_pdgs": event_reco_cand_pdgs,
             "event_reco_cand_charges": event_reco_cand_charges,
         }
+        if self.keep_event_metadata:
+            file_ids_per_jet, event_ids_per_jet, _ = ak.broadcast_arrays(
+                file_ids, event_ids, reco_jets_p4.pt
+            )
+            combined_dict.update(
+                {
+                    "file_id": file_ids_per_jet,
+                    "event_id": event_ids_per_jet,
+                }
+            )
 
         # Flatten all arrays from [n_events, n_jets, ...] to [n_jets_total, ...]
         data = ak.Array({k: ak.flatten(v, axis=1) for k, v in combined_dict.items()})
