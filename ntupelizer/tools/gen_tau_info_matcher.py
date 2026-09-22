@@ -239,8 +239,6 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
       - gen_jet_tau_vis_daughter_charges: float charge
     """
 
-    INTERMEDIATE_MESON_PDGS = frozenset({221, 223, 323})
-
     def __init__(
         self,
         arrays,
@@ -275,32 +273,41 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
         relation_indices = event["_MCParticles_daughters.index"]
         daughter_begin = event["MCParticles.daughters_begin"]
         daughter_end = event["MCParticles.daughters_end"]
+        generator_status = event["MCParticles.generatorStatus"]
         expanded_tau_daughters = []
+
+        def expand_daughter(daughter_idx):
+            daughter_idx = int(daughter_idx)
+            if int(generator_status[daughter_idx]) == 0:
+                # Skip daughter particles whose generator status is 0.
+                # See fill_tau_info() for more information.
+                return []
+            daughter_pdg = int(event["MCParticles.PDG"][daughter_idx])
+            immediate_daughters = [
+                int(idx)
+                for idx in relation_indices[
+                    daughter_begin[daughter_idx] : daughter_end[daughter_idx]
+                ]
+            ]
+            is_meson_to_two_photons = abs(daughter_pdg) == 111 or (
+                abs(daughter_pdg) == 221 and len(immediate_daughters) == 2 and all(
+                    abs(int(event["MCParticles.PDG"][idx])) == 22
+                    for idx in immediate_daughters
+                )
+            )
+
+            if int(generator_status[daughter_idx]) != 2 or is_meson_to_two_photons:
+                return [daughter_idx]
+
+            expanded_daughters = []
+            for immediate_daughter_idx in immediate_daughters:
+                expanded_daughters.extend(expand_daughter(immediate_daughter_idx))
+            return expanded_daughters
 
         for daughters in tau_daughters:
             expanded_daughters = []
             for daughter_idx in daughters:
-                daughter_idx = int(daughter_idx)
-                daughter_pdg = int(event["MCParticles.PDG"][daughter_idx])
-                if abs(daughter_pdg) in self.INTERMEDIATE_MESON_PDGS:
-                    immediate_daughters = [
-                        int(idx)
-                        for idx in relation_indices[
-                            daughter_begin[daughter_idx] : daughter_end[daughter_idx]
-                        ]
-                    ]
-                    is_eta_to_two_photons = abs(daughter_pdg) == 221 and len(
-                        immediate_daughters
-                    ) == 2 and all(
-                        abs(int(event["MCParticles.PDG"][idx])) == 22
-                        for idx in immediate_daughters
-                    )
-                    if is_eta_to_two_photons:
-                        expanded_daughters.append(daughter_idx)
-                    else:
-                        expanded_daughters.extend(immediate_daughters)
-                else:
-                    expanded_daughters.append(daughter_idx)
+                expanded_daughters.extend(expand_daughter(daughter_idx))
             expanded_tau_daughters.append(expanded_daughters)
 
         return expanded_tau_daughters
