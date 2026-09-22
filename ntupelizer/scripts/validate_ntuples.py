@@ -88,10 +88,13 @@ if __name__ == "__main__":
     # ── data integrity plots (signal and background overlaid) ─────────────────
     import matplotlib.pyplot as plt
 
-    def save_overlay(plot_fn, output_name, **kwargs):
+    def save_overlay(plot_fn, output_name, is_2d=False, **kwargs):
         fig, ax = plt.subplots(figsize=(7, 5.5))
-        plot_fn(sig_data, label="Signal", ax=ax, color="red", **kwargs)
-        plot_fn(bkg_data, label="Background", ax=ax, color="blue", **kwargs)
+        if is_2d:
+            plot_fn(sig_data, label="Signal", ax=ax, **kwargs)
+        else:
+            plot_fn(sig_data, label="Signal", ax=ax, color="red", **kwargs)
+            plot_fn(bkg_data, label="Background", ax=ax, color="blue", **kwargs)
         plt.tight_layout()
         fig.savefig(os.path.join(output_dir, output_name), bbox_inches="tight")
         plt.close(fig)
@@ -100,10 +103,10 @@ if __name__ == "__main__":
     save_overlay(di.plot_jet_pt, "reco_jet_pt.pdf")
 
     if "gen_jet_tau_vis_energy" in sig_data.fields:
-        save_overlay(di.plot_reco_jet_energy, "reco_jet_energy.pdf")
+        save_overlay(di.plot_reco_jet_energy, "reco_jet_energy.pdf", is_2d=True)
 
     if "reco_cand_matched_gen_energy" in sig_data.fields:
-        save_overlay(di.plot_reco_vs_gen_cand_energy, "reco_cand_energy.pdf")
+        save_overlay(di.plot_reco_vs_gen_cand_energy, "reco_cand_energy.pdf", is_2d=True)
 
     _lifetime_bins = {
         "reco_cand_dxy": np.logspace(-3, 1, 80),   # 1 µm – 10 mm
