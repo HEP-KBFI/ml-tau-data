@@ -141,6 +141,8 @@ def _discover_columns(files, wanted_columns):
 
 
 WANTED_COLUMNS = [
+    "file_id",
+    "event_id",
     # basic reco inputs
     "reco_jet_p4",
     "reco_cand_p4s",
