@@ -18,6 +18,7 @@ rule ntupelize:
         is_signal                   = lambda wc: DATASETS[wc.dataset]["is_signal"],
         ntupelizer_class            = NTUPELIZER_CLASS,
         replace_intermediate_mesons = config.get("replace_intermediate_mesons", True),
+        include_leptonic_tau_decays = config.get("include_leptonic_tau_decays", False),
         container                   = CONTAINER,
         # Temporary per-job directory for individual per-file parquets that
         # are concatenated into the single batch output at the end.
@@ -50,6 +51,7 @@ rule ntupelize:
                     ++is_signal={params.is_signal} \
                     ++ntupelizer_class={params.ntupelizer_class} \
                     ++replace_intermediate_mesons={params.replace_intermediate_mesons} \
+                    ++include_leptonic_tau_decays={params.include_leptonic_tau_decays} \
                     hydra.run.dir=/tmp \
                     hydra.output_subdir=null \
                     hydra/job_logging=disabled; then

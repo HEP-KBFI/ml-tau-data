@@ -68,7 +68,10 @@ class GenJetClusterer(JetClusterer):
         particles_p4: ak.Array,
         min_pt: float = 0.0,
         deltar: float = 0.4,
+        drop_lepton_jets: bool = True,
     ):
+        # Set before super().__init__, which calls _filter_jets.
+        self.drop_lepton_jets = drop_lepton_jets
         super().__init__(
             particles=particles, particles_p4=particles_p4, min_pt=min_pt, deltar=deltar
         )
@@ -77,7 +80,13 @@ class GenJetClusterer(JetClusterer):
         """Filter out all gen jets that have a lepton as one of their consituents (so in dR < 0.4)
         Currently see that also some jets with 6 hadrons and an electron are filtered out
         Roughly 90% of gen jets will be left after filtering
+
+        This is what keeps leptonic tau decays out of the dataset: a tau that
+        decayed to an e or mu never gets a gen jet.  With drop_lepton_jets=False
+        every gen jet is kept.
         """
+        if not self.drop_lepton_jets:
+            return self.all_jets, self.all_constituent_indices
         gen_num_ptcls_per_jet = ak.num(self.all_constituent_indices, axis=-1)
         gen_jet_pdgs = g.get_jet_constituent_property(
             self.particles.PDG, self.all_constituent_indices, gen_num_ptcls_per_jet
