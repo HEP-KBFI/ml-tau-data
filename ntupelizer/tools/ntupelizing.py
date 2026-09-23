@@ -129,9 +129,21 @@ class EDM4HEPNtupelizer:
         reco_jets, reco_constituent_indices = cl.RecoJetClusterer(
             particles=reco_particles, particles_p4=reco_particles_p4
         ).results
+        # Leptonic tau decays are dropped from signal by default.  They are
+        # removed in three places, and all three have to be switched off to
+        # keep them: gen jets with an e/mu constituent are never formed (this is
+        # the one that actually does the work), jets with a reconstructed e/mu
+        # candidate are vetoed, and gen_jet_tau_decaymode == 16 is cut.
+        # Background samples are always treated the default way -- so with the
+        # switch on, a lepton in the jet identifies signal (see README).
+        keep_leptonic_taus = signal_sample and bool(
+            self.cfg.get("include_leptonic_tau_decays", False)
+        )
         print("Clustering gen jets ...")
         gen_jets, gen_constituent_indices = cl.GenJetClusterer(
-            particles=mc_particles, particles_p4=mc_particles_p4
+            particles=mc_particles,
+            particles_p4=mc_particles_p4,
+            drop_lepton_jets=not keep_leptonic_taus,
         ).results
         reco_jets, gen_jets, reco_jet_constituent_indices = m.JetMatcher(
             reco_jets=reco_jets,
@@ -268,12 +280,15 @@ class EDM4HEPNtupelizer:
         # Flatten all arrays from [n_events, n_jets, ...] to [n_jets_total, ...]
         data = ak.Array({k: ak.flatten(v, axis=1) for k, v in combined_dict.items()})
 
-        lepton_mask = (13 == abs(data.reco_cand_pdgs)) | (
-            11 == abs(data.reco_cand_pdgs)
-        )
-        hadronic_jet_mask = ak.sum(lepton_mask, axis=1) == 0
-        data = ak.Array({key: data[key][hadronic_jet_mask] for key in data.fields})
-        removal_mask = data.gen_jet_tau_decaymode != 16
+        if not keep_leptonic_taus:
+            lepton_mask = (13 == abs(data.reco_cand_pdgs)) | (
+                11 == abs(data.reco_cand_pdgs)
+            )
+            hadronic_jet_mask = ak.sum(lepton_mask, axis=1) == 0
+            data = ak.Array({key: data[key][hadronic_jet_mask] for key in data.fields})
+            removal_mask = data.gen_jet_tau_decaymode != 16
+        else:
+            removal_mask = ak.ones_like(data.gen_jet_tau_decaymode, dtype=bool)
         if signal_sample:
             removal_mask = (data.gen_jet_tau_decaymode != -1) & removal_mask
         print(f"{np.sum(removal_mask)} jets after masking")
@@ -351,6 +366,10 @@ class DecayProductNtupelizer(PodioROOTNtuplelizer):
             {"pt": 0.0, "eta": 0.0, "phi": 0.0, "energy": 0.0}
         )
         info["gen_jet_tau_vis_daughter_pdgs"] = _empty_daughters(0)
+        info["gen_jet_tau_vis_daughter_pdgs_rare"] = _empty_daughters(0)
+        info["gen_jet_tau_decaymode_rare"] = ak.values_astype(
+            ak.ones_like(gen_jets.eta) * -1, np.int64
+        )
         info["gen_jet_tau_vis_daughter_charges"] = _empty_daughters(0.0)
         return info
 

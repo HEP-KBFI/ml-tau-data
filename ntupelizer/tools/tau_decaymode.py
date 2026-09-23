@@ -173,3 +173,75 @@ DM_NAME_MAPPING = {
     15: "RareDecayMode",
     16: "LeptonicDecay",
 }
+
+
+# ── rare decay mode ───────────────────────────────────────────────────────────
+# The twelve most common hadronic tau decays, in descending branching fraction,
+# so the class id is the frequency rank.  Each entry is the exact multiset of
+# visible daughters (by |PDG|) that the tau must have.  Written for the
+# gen_jet_tau_vis_daughter_pdgs_rare list, where a K0_S is one daughter rather
+# than a pair of pions.
+#
+# The neutral kaon is one species here: 310 (K0_S), 130 (K0_L) and 311 (K0) all
+# count as 311, so "pi K0" is class 6 whichever mass eigenstate the K0 became.
+RARE_DECAY_MODE_TARGETS = (
+    {111: 1, 211: 1},          # 0: pi + pi0
+    {211: 1},                  # 1: pi
+    {211: 3},                  # 2: 3pi
+    {111: 2, 211: 1},          # 3: pi + 2pi0
+    {111: 1, 211: 3},          # 4: 3pi + pi0
+    {111: 3, 211: 1},          # 5: pi + 3pi0
+    {211: 1, 311: 1},          # 6: pi + K0
+    {321: 1},                  # 7: K
+    {111: 2, 211: 3},          # 8: 3pi + 2pi0
+    {111: 1, 321: 1},          # 9: K + pi0
+    {111: 1, 211: 1, 311: 1},  # 10: pi + pi0 + K0
+    {211: 2, 321: 1},          # 11: 2pi + K
+)
+RARE_DECAY_MODE_OTHER = 15
+RARE_DECAY_MODE_NAMES = {
+    0: "pi pi0", 1: "pi", 2: "3pi", 3: "pi 2pi0", 4: "3pi pi0", 5: "pi 3pi0",
+    6: "pi K0", 7: "K", 8: "3pi 2pi0", 9: "K pi0", 10: "pi pi0 K0", 11: "2pi K",
+    15: "other", 16: "leptonic",
+}
+
+_NEUTRAL_KAONS = frozenset({310, 130, 311})
+
+
+def classify_rare_decay_mode(pdg_ids):
+    """Rare decay mode id of one tau: 0-11, 16 for leptonic, 15 for other.
+
+    Photons and neutrinos are ignored, so a radiative decay lands in its
+    parent's class, as in classify_decay_mode.  Every other daughter counts: a
+    species no target asks for (an eta, an electron, ...) makes the tau "other"
+    rather than being silently skipped.  Note that the _rare daughter list is
+    expanded before it gets here, so an omega or an eta -> 3pi0 arrives as its
+    pions and is classified by them (pi omega -> 3pi pi0, class 4); only an
+    eta -> gamma gamma is still a 221 and lands in "other".
+
+    A leptonic decay -- a lone e or mu, with photons and neutrinos ignored -- is
+    LEPTONIC_DECAY_MODE (16), the same id as in classify_decay_mode.  Leptonic
+    taus are only in the dataset when include_leptonic_tau_decays is on.
+    """
+    counts = {}
+    for pdg in pdg_ids:
+        pdg = int(abs(pdg))
+        if pdg in IGNORED_PDGS:
+            continue
+        if pdg in _NEUTRAL_KAONS:
+            pdg = 311
+        counts[pdg] = counts.get(pdg, 0) + 1
+    for class_id, target in enumerate(RARE_DECAY_MODE_TARGETS):
+        if counts == target:
+            return class_id
+    if counts in ({11: 1}, {13: 1}):
+        return LEPTONIC_DECAY_MODE
+    return RARE_DECAY_MODE_OTHER
+
+
+def classify_rare_decay_modes(pdg_ids_per_tau):
+    """`classify_rare_decay_mode` over many taus (list of lists or awkward array)."""
+    rows = pdg_ids_per_tau
+    if hasattr(rows, "to_list"):
+        rows = rows.to_list()
+    return np.array([classify_rare_decay_mode(row) for row in rows], dtype=np.int64)

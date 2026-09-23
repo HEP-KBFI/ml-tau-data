@@ -2,6 +2,11 @@ output_dir: /local/${USER}/0915_ParTauDETR_dataset
 temp_dir: /local/${USER}/tmp/ntupelized_tmp # ntupelized batches; kept, so stages 2-5 can be re-run without re-ntupelizing
 ntupelizer_class: DecayProductNtupelizer # or PodioROOTNtuplelizer
 replace_intermediate_mesons: true
+# Keep leptonic tau decays (tau -> e/mu nu nu) in the signal sample. Off by
+# default: signal then contains hadronic taus only. Background is unaffected,
+# i.e. it still loses every jet with a gen/reco e/mu, so with this on a lepton
+# in the jet identifies signal. Meant for decay-mode studies, not tau ID training.
+include_leptonic_tau_decays: false
 chunk_size: 100000 # max events per output file: z_train_00000.parquet, z_train_00001.parquet, ...
 row_group_size: 1024 # rows per parquet row group
 split_seed: 12345 # seed for reproducible train/test assignment and output shuffling
