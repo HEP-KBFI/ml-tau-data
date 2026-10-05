@@ -149,9 +149,9 @@ WANTED_COLUMNS = [
     "reco_cand_charges",
     "reco_cand_pdgs",
     # advanced reco inputs: track impact parameters
-    "reco_cand_dz",
+    "reco_cand_signed_dz",
     "reco_cand_dz_error",
-    "reco_cand_dxy",
+    "reco_cand_signed_dxy",
     "reco_cand_dxy_error",
     # targets
     "gen_jet_p4",  # generated jet p4
