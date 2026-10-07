@@ -37,7 +37,12 @@ ArrayLike = np.ndarray | ak.Array
 # Constants
 # =============================================================================
 
-INVALID_VALUE = -1000.0  # Default value for invalid/missing measurements
+# Value for invalid/missing measurements (e.g. neutral candidates without a
+# track). 0 rather than a large sentinel: the training dataloaders zero these
+# entries anyway, and 0 cannot blow up an input normalisation. A missing
+# measurement is still recognisable by its error being 0, since every real
+# track has a positive IP error.
+INVALID_VALUE = 0.0
 NUM_TRACK_STATES = 4  # Number of track states stored per track
 
 
