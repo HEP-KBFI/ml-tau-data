@@ -55,7 +55,10 @@ class EDM4HEPNtupelizer:
         filler = ak.without_parameters(g.reinitialize_p4(ak.zeros_like(gen_jets)))
         gen_jet_tau_info = {
             "gen_jet_tau_vis_energy": ak.zeros_like(gen_jets.eta),
-            "gen_jet_tau_decaymode": ak.ones_like(gen_jets.eta) * -1,
+            # int64 to match the signal decay modes (classify_decay_modes).
+            "gen_jet_tau_decaymode": ak.values_astype(
+                ak.ones_like(gen_jets.eta) * -1, np.int64
+            ),
             "gen_jet_tau_charge": ak.ones_like(gen_jets.eta) * -999,
             # `filler` is already in the standard schema, so it matches the signal
             # p4s field-for-field.  Re-zipping it under {pt, eta, phi, energy}
