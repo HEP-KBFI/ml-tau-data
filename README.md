@@ -145,6 +145,7 @@ chunk_size: 100000                   # max jets per output Parquet file
 row_group_size: 1024                 # rows per parquet row group
 split_seed: 12345                    # makes the train/test split reproducible
 files_per_job: 20                    # ROOT files per SLURM job in stage 1
+include_leptonic_tau_decays: false   # keep tau -> e/mu nu nu in signal only (default: dropped); see Rare decay mode
 
 ntupelizer_class: DecayProductNtupelizer   # adds the gen_jet_tau_vis_daughter_* fields
 
@@ -276,18 +277,34 @@ across.
 
 ## Misc
 
-### Rare decay mode dataset
+### Rare decay mode
 
-`ntupelizer/scripts/ParTauDETR_dataset_to_rare.py` adds a
-`gen_jet_tau_decay_mode_rare` column to the tau daughter (ParTauDETR) dataset. It
-counts each tau's visible daughters by PDG and matches the resulting multiset
-against the twelve most common tau decays; anything else is labelled 15
-("other"). Background (`qq`) files are skipped, since only the signal sample has
-a meaningful gen-level decay mode.
+`DecayProductNtupelizer` writes two extra per-jet columns for the tau daughter
+(ParTauDETR) dataset, computed during ntupelization like every other column:
 
-The twelve targets are the most common hadronic modes in descending branching
-fraction, so the class id is the frequency rank. Fractions measured on 200k
-signal jets, before radiative decays were folded in (see below):
+- **`gen_jet_tau_vis_daughter_pdgs_rare`** — the visible daughter PDGs, expanded
+  the same way as `gen_jet_tau_vis_daughter_pdgs` except that a K⁰_S is kept as
+  one daughter (310) instead of being replaced by its pions. A tau decays to the
+  flavour state K⁰ (311), which the generator always writes out as either K⁰_S or
+  K⁰_L, so with `replace_intermediate_mesons: true` (the default) the list holds
+  310 or 130, never 311. With `replace_intermediate_mesons: false` nothing is
+  expanded, so the list is the tau's immediate daughters and holds 311, η, ω, …
+  as they are. K⁰_S decays inside the tracker (cτ = 26.8 mm) and is
+  reconstructible as a V0; K⁰_L is final-state anyway. The list is not
+  index-aligned with the daughter p4s/charges.
+- **`gen_jet_tau_decaymode_rare`** — the decay mode classified from that list
+  into the twelve most common hadronic tau decays, 16 for a leptonic decay, or
+  15 ("other"). −1 marks a jet with no matched tau, as for
+  `gen_jet_tau_decaymode`. Leptonic taus are dropped from the dataset by default
+  and only appear with `include_leptonic_tau_decays: true` (see Configuration).
+  That switch acts on the signal sample only: background still loses every jet
+  with a gen or reco e/mu, so with it on, "the jet contains a lepton" identifies
+  signal outright. Use it for decay-mode studies, not for tau-vs-jet training.
+
+The classifier is `classify_rare_decay_mode` in `ntupelizer/tools/tau_decaymode.py`,
+so ml-tau-model can reuse it. The class id is the frequency rank; fractions were
+measured on 200k signal jets (with the earlier, K⁰_S-expanding daughter list, so
+classes 6 and 10 now gain the K⁰_S decays that used to fall elsewhere):
 
 | class | decay mode | fraction |
 |------:|------------|---------:|
@@ -305,49 +322,24 @@ signal jets, before radiative decays were folded in (see below):
 | 11 | 2π K       | 5.43e-3 |
 | 15 | other      | 2.22e-2 |
 
-Together the twelve cover 97.8% of signal jets. Note the PDG codes the matcher
-expects: the neutral kaon is **311** (`K⁰`) in this sample, not 310 (`K⁰_S`) —
-5309 vs 503 daughters over those 200k jets — and the single-kaon modes are the
-charged kaon, **321**.
+How daughters are counted:
 
-Photons are not counted, so a radiative decay is classed with its parent:
-`γ π⁰ π` is class 0, the same as `π⁰ π`. This is how PDG treats tau radiative
-modes (indented sub-modes of the parent channel, defined only relative to a
-photon energy cutoff) and how `gen_jet_tau_decaymode` is labelled, so the two
-labels agree on these jets. Radiative decays are 0.28% of signal jets, nearly
-all `γ π⁰ π`; folding them in moves that 0.28% from "other" into class 0
-relative to the table above.
-
-Leptonic taus never appear: the ntupelizer drops `gen_jet_tau_decaymode == 16`
-before these files are written, which is also why the script's electron-daughter
-filter removes almost nothing.
-
-Run it with:
-
-```bash
-./run.sh python3 ntupelizer/scripts/ParTauDETR_dataset_to_rare.py \
-    -i /scratch/persistent/laurits/ml-tau/20260818_tauDaughterDataset \
-    -o /scratch/persistent/laurits/ml-tau/20260824_rareDecaysDataset
-```
-
-Both paths default to those values, so plain
-`./run.sh python3 ntupelizer/scripts/ParTauDETR_dataset_to_rare.py` does the same
-thing. The script runs in one process and is not part of the Snakemake workflow —
-run it by hand after the dataset is built.
-
-It is a 1:1 file transform: one output per input, **under the same filename**,
-with the same rows (minus the electron cut) and the same `--row-group-size`
-(default 1024, matching what `merge_files.py` writes). Only the input's daughter
-PDG column goes through awkward; the rest of the table is carried through as
-Arrow, so every other column keeps exactly the type it had. It refuses to run
-with `-o` equal to `-i`.
-
-`--batch-size` (default 100000) controls only how many rows are held in memory at
-once — it has no effect on the output layout, so lower it if the job is tight on
-memory. On a 100k-jet input, 100000 peaks around 1.8 GB and 20000 around 1.0 GB,
-for the same output. One caveat: a batch boundary inside a file starts a new row
-group, so keep `--batch-size` at or above the input's row count if you want the
-row groups to come out perfectly uniform.
+- **Neutral kaons are one species.** 310, 130 and 311 all count as "K⁰", so a
+  π K⁰ decay is class 6 whether the K⁰ became a K⁰_S or a K⁰_L. The daughter
+  list keeps the S/L distinction for anyone who needs it.
+- **Single-kaon modes are the charged kaon**, 321.
+- **Photons and neutrinos are ignored**, so a radiative decay (`γ π⁰ π`) lands in
+  its parent's class, matching `gen_jet_tau_decaymode` and how PDG treats tau
+  radiative modes (indented sub-modes of the parent, defined only relative to a
+  photon energy cutoff).
+- **Intermediate resonances are counted through their decay products**, since
+  the list is expanded before classification: π ω (ω → π⁺π⁻π⁰) is class 4,
+  π η (η → 3π⁰) is class 5, and K*⁻ → K⁰ π⁻ is class 6. The exception is
+  η → γγ, which the expansion keeps as one 221.
+- **Any daughter no target asks for makes the tau "other"** — a surviving η
+  (221), an electron next to hadrons, a K K⁰ pair, … — rather than being
+  silently skipped. Final states that match no target (e.g. 3π 3π⁰) are
+  "other" too.
 
 ## Repository structure
 
@@ -374,7 +366,6 @@ ntupelizer/
     compute_weights.py             # stage 2
     apply_weights.py               # standalone: re-weight existing chunks
     validate_ntuples.py            # stage 4
-    ParTauDETR_dataset_to_rare.py  # standalone: add the rare decay mode label
     slurm_status.py                # Snakemake cluster-status helper
   tools/
     ntupelizing.py                 # PodioROOTNtuplelizer / EDM4HEPNtupelizer
@@ -440,5 +431,5 @@ venv lives on the host and needs only Snakemake, while the scientific stack only
 ever has to exist inside the image.
 
 `run.sh` in the repository root is a separate manual wrapper around the same
-image, for running a script by hand outside the workflow (see Misc). The
+image, for running a script by hand outside the workflow. The
 Snakemake workflow does not use it, and the two set different bind mounts.
