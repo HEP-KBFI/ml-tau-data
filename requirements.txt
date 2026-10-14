@@ -16,3 +16,6 @@ pulp<2.8
 docopt
 torch
 boost_histogram
+matplotlib
+mplhep
+seaborn

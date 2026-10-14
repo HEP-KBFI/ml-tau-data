@@ -1,12 +1,38 @@
+# Pylint configuration used by the CI (.github/workflows/code_style.yml).
+# To ignore a check repo-wide, add its code to `disable` below with a short reason.
+# To ignore it for a single line, use an inline `# pylint: disable=<symbol>` comment instead.
+
+[MASTER]
+# Never fail the job because of lint findings; CI only reports them.
+exit-zero = yes
+ignore = .venv39, .snakemake, outputs, logs
+
 [MESSAGES CONTROL]
-disable=C0114, C0116
+disable =
+    # --- Documentation ---
+    C0114,  # missing-module-docstring
+    C0115,  # missing-class-docstring
+    C0116,  # missing-function-docstring
+
+    # --- Environment / tooling false positives ---
+    E0401,  # import-error: CI does not install the heavy physics stack (torch, fastjet, ...)
+    E1120,  # no-value-for-parameter: @hydra.main injects `cfg`, pylint cannot see it
+
+    # --- Naming: physics conventions (pT, tanL, D0, deltaR, x, y, ...) are intentional ---
+    C0103,  # invalid-name
+
+    # --- Complexity limits: analysis code naturally has many columns/args/locals ---
+    R0902,  # too-many-instance-attributes
+    R0903,  # too-few-public-methods
+    R0913,  # too-many-arguments
+    R0914,  # too-many-locals
+    R0917,  # too-many-positional-arguments
 
 [REPORTS]
-output-format=colorized
 score = yes
 
 [FORMAT]
-max-line-length=120
+max-line-length = 120
 
-[MASTER]
-exit-zero = yes
+[SIMILARITIES]
+min-similarity-lines = 10
