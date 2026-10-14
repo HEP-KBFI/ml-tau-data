@@ -151,7 +151,7 @@ if __name__ == "__main__":
     # applied by the merge stage, so the plots live with the other validation.
     wt.plot_weight_distributions(sig_weights, bkg_weights, output_dir)
 
-    INVALID = -1000.0
+    INVALID = 0.0  # lifetime.INVALID_VALUE
     error_vars = {
         "reco_cand_dxy_error": "PFCandidate dxy error [mm]",
         "reco_cand_dz_error": "PFCandidate dz error [mm]",
@@ -166,7 +166,7 @@ if __name__ == "__main__":
             (bkg_data, "Background", "blue"),
         ]:
             flat = ak.to_numpy(ak.flatten(data[var]))
-            flat = flat[flat > INVALID + 1]
+            flat = flat[flat > INVALID]  # errors of real tracks are > 0
             counts, edges = np.histogram(flat, bins=error_bins, density=True)
             ax.step(edges[:-1], counts, where="post", label=label, color=color)
         ax.set_xscale("log")

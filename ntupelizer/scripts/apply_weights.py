@@ -162,7 +162,7 @@ if __name__ == "__main__":
         print("Saved weight distribution plot.")
 
         # ── dxy / dz error overlay plots (only load the two needed columns) ──
-        INVALID = -1000.0
+        INVALID = 0.0  # lifetime.INVALID_VALUE
         error_vars = {
             "reco_cand_dxy_error": "PFCandidate dxy error [mm]",
             "reco_cand_dz_error": "PFCandidate dz error [mm]",
@@ -181,7 +181,7 @@ if __name__ == "__main__":
                 (bkg_data, "Background", "blue"),
             ]:
                 flat = ak.to_numpy(ak.flatten(data[var]))
-                flat = flat[flat > INVALID + 1]
+                flat = flat[flat > INVALID]  # errors of real tracks are > 0
                 counts, edges = np.histogram(flat, bins=log_bins, density=True)
                 ax.step(edges[:-1], counts, where="post", label=label, color=color)
             ax.set_xscale("log")

@@ -230,13 +230,33 @@ class GenTauInfoMatcher:
         return gen_jet_tau_info
 
 
+# Mass eigenstates of the neutral kaon, kept as single daughters in the _rare
+# daughter list.  A tau decays to the flavour state K0 (311), which the
+# generator always writes out as exactly one of these two -- never anything
+# else -- so 311 carries strictly less information than 310/130 and is expanded
+# one step rather than kept.  K0_S (ctau 26.8 mm) decays inside the tracker and
+# is reconstructible as a V0, so it is worth keeping rather than expanding into
+# pi+ pi- / pi0 pi0.  K0_L (ctau 15.3 m) is a final-state particle anyway and is
+# listed only to make the intent explicit.
+NEUTRAL_KAON_PDGS = frozenset({310, 130})
+
+
 class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
     """Extends GenTauInfoMatcher with per-visible-daughter p4, PDG, and charge.
 
-    Adds three extra jagged properties per gen jet (shape [n_events, n_jets, var]):
+    Adds four extra jagged properties per gen jet (shape [n_events, n_jets, var]):
       - gen_jet_tau_vis_daughter_p4s    : ak.zip({pt, eta, phi, energy})
       - gen_jet_tau_vis_daughter_pdgs   : raw PDG int
+      - gen_jet_tau_vis_daughter_pdgs_rare: as above, but a K0_S is kept as one
+        daughter (310) instead of being expanded into its pions.  Not
+        index-aligned with the p4s/charges.  Without
+        replace_intermediate_mesons it is the raw immediate daughters (311, eta,
+        omega, ... unexpanded).
       - gen_jet_tau_vis_daughter_charges: float charge
+
+    and one scalar per gen jet:
+      - gen_jet_tau_decaymode_rare: classify_rare_decay_mode of the _rare list,
+        -1 for a jet with no matched tau
     """
 
     def __init__(
@@ -258,6 +278,8 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
             "tau_vis_daughter_p4s",
             "tau_vis_daughter_pdgs",
             "tau_vis_daughter_charges",
+            "tau_vis_daughter_pdgs_rare",
+            "tau_decaymode_rare",
         ]
         self.fill_values.update(
             {
@@ -265,11 +287,20 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
                     [{"pt": 0.0, "eta": 0.0, "phi": 0.0, "energy": 0.0}]
                 )[:0],
                 "tau_vis_daughter_pdgs": ak.Array([0])[:0],
+                "tau_vis_daughter_pdgs_rare": ak.Array([0])[:0],
+                # -1 for a jet with no matched tau, as for tau_decaymode.
+                "tau_decaymode_rare": -1,
                 "tau_vis_daughter_charges": ak.Array([0.0])[:0],
             }
         )
 
-    def replace_mesons_with_daughters(self, tau_daughters, event):
+    def replace_mesons_with_daughters(self, tau_daughters, event, stop_pdgs=()):
+        """Walk intermediate daughters down to their decay products.
+
+        `stop_pdgs` lists species (by |PDG|) that are kept as one daughter
+        instead of being expanded.  It is empty for the standard daughter list,
+        so that list is unaffected; the _rare list passes the neutral kaons.
+        """
         relation_indices = event["_MCParticles_daughters.index"]
         daughter_begin = event["MCParticles.daughters_begin"]
         daughter_end = event["MCParticles.daughters_end"]
@@ -283,6 +314,8 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
                 # See fill_tau_info() for more information.
                 return []
             daughter_pdg = int(event["MCParticles.PDG"][daughter_idx])
+            if abs(daughter_pdg) in stop_pdgs:
+                return [daughter_idx]
             immediate_daughters = [
                 int(idx)
                 for idx in relation_indices[
@@ -315,8 +348,17 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
     def retrieve_tau_info_from_daughters(
         self, tau_daughters, n_taus, event, event_particle_p4s
     ):
+        # The _rare daughter list follows the same expansion as the standard
+        # one, except that a K0_S stops the walk and is recorded as one 310,
+        # so "the decay contained a neutral kaon" survives instead of turning
+        # into a pair of pions.
         if self.replace_intermediate_mesons:
+            rare_tau_daughters = self.replace_mesons_with_daughters(
+                tau_daughters, event, stop_pdgs=NEUTRAL_KAON_PDGS
+            )
             tau_daughters = self.replace_mesons_with_daughters(tau_daughters, event)
+        else:
+            rare_tau_daughters = tau_daughters
 
         # Get the parent dict (decaymode, tau_p4, tau_daughter_PDG, tau_vis_energy)
         tau_info = super().retrieve_tau_info_from_daughters(
@@ -376,5 +418,23 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
         tau_info["tau_vis_daughter_p4s"] = ak.Array(all_daughter_p4s)
         tau_info["tau_vis_daughter_pdgs"] = ak.Array(all_daughter_pdgs)
         tau_info["tau_vis_daughter_charges"] = ak.Array(all_daughter_charges)
+
+        all_rare_pdgs = []
+        for tau_idx in range(n_taus):
+            rare_pdgs = []
+            for di in rare_tau_daughters[tau_idx]:
+                pdg_val = int(event["MCParticles.PDG"][di])
+                if abs(pdg_val) in [12, 14, 16]:
+                    continue
+                rare_pdgs.append(pdg_val)
+            all_rare_pdgs.append(
+                ak.Array(rare_pdgs) if rare_pdgs else ak.Array([0])[:0]
+            )
+        tau_info["tau_vis_daughter_pdgs_rare"] = ak.Array(all_rare_pdgs)
+        # Rare decay mode, classified from the _rare list so that a K0_S counts
+        # as a neutral kaon rather than as two pions.
+        tau_info["tau_decaymode_rare"] = ak.Array(
+            dm.classify_rare_decay_modes(all_rare_pdgs)
+        )
 
         return tau_info
