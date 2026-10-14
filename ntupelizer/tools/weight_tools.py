@@ -1,12 +1,7 @@
-import glob
-import multiprocessing
 import os
-from itertools import repeat
 
 import awkward as ak
 import general as g
-import hydra
-import matplotlib
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import mplhep as hep
@@ -15,10 +10,9 @@ import seaborn as sns
 from general import load_all_data
 from matplotlib import ticker
 from matplotlib.ticker import AutoLocator
-from omegaconf import DictConfig
 
 hep.style.use(hep.styles.CMS)
-matplotlib.use("Agg")
+mpl.use("Agg")
 
 
 def load_samples(sig_dir: str, bkg_dir: str, n_files: int = -1, branches: list = None):
@@ -281,7 +275,3 @@ def plot_weight_distributions(signal_weights, bkg_weights, output_dir):
     output_path = os.path.join(output_dir, "weight_1D_distribution.pdf")
     plt.savefig(output_path)
     plt.close("all")
-
-
-if __name__ == "__main__":
-    main()

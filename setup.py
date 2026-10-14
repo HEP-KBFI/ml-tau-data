@@ -26,6 +26,9 @@ FULL_DEPS = CORE_DEPS + [
     "numba",
     "pyarrow",
     "matplotlib",
+    "mplhep",
+    "seaborn",
+    "boost_histogram",
 ]
 
 setup(
