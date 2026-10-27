@@ -13,6 +13,7 @@ from ntupelizer.tools import general as g
 from ntupelizer.tools import lifetime as lt
 from ntupelizer.tools import matching as m
 from ntupelizer.tools import particle_filters as pfl
+from ntupelizer.tools.tau_decaymode import LEPTONIC_DECAY_MODE
 
 
 class EDM4HEPNtupelizer:
@@ -284,12 +285,13 @@ class EDM4HEPNtupelizer:
         data = ak.Array({k: ak.flatten(v, axis=1) for k, v in combined_dict.items()})
 
         if not keep_leptonic_taus:
-            lepton_mask = (13 == abs(data.reco_cand_pdgs)) | (
+            lepton_mask = (
+                13 == abs(data.reco_cand_pdgs)) | (
                 11 == abs(data.reco_cand_pdgs)
             )
             hadronic_jet_mask = ak.sum(lepton_mask, axis=1) == 0
             data = ak.Array({key: data[key][hadronic_jet_mask] for key in data.fields})
-            removal_mask = data.gen_jet_tau_decaymode != 16
+            removal_mask = data.gen_jet_tau_decaymode != LEPTONIC_DECAY_MODE
         else:
             removal_mask = ak.ones_like(data.gen_jet_tau_decaymode, dtype=bool)
         if signal_sample:

@@ -6,20 +6,20 @@ replace_intermediate_mesons: true
 # default: signal then contains hadronic taus only. Background is unaffected,
 # i.e. it still loses every jet with a gen/reco e/mu, so with this on a lepton
 # in the jet identifies signal. Meant for decay-mode studies, not tau ID training.
-include_leptonic_tau_decays: false
+include_leptonic_tau_decays: true
 chunk_size: 100000 # max events per output file: z_train_00000.parquet, z_train_00001.parquet, ...
 row_group_size: 1024 # rows per parquet row group
 split_seed: 12345 # seed for reproducible train/test assignment and output shuffling
 datasets:
     p8_ee_Z_tautau_ecm91:
-        input_dir: "/local/joosep/mlpf/cld/v1.2.5_key4hep_2025-05-29/gen/p8_ee_Z_tautau_ecm91/root/"
+        input_dir: "/local/joosep/mlpf/cld/v1.3.0_key4hep_2026-04-08/gen/p8_ee_Z_tautau_ecm91/root/"
         file_pattern: "*.root"
         short_name: z
         is_signal: true
         train_frac: 0.9
 
     p8_ee_Z_qq_ecm91:
-        input_dir: "/local/joosep/mlpf/cld/v1.2.5_key4hep_2025-05-29/gen/p8_ee_Z_qq_ecm91/root/"
+        input_dir: "/local/joosep/mlpf/cld/v1.3.0_key4hep_2026-04-08/gen/p8_ee_Z_qq_ecm91/root/"
         file_pattern: "*.root"
         short_name: qq
         is_signal: false
