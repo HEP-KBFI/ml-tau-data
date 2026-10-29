@@ -37,6 +37,7 @@ RARE_DECAY_MODE = 15
 RARE_DECAY_MODE_EXT = 30
 
 LEPTONIC_DECAY_MODE = 16
+MIXED_DECAY_MODE = 17
 
 MAX_NEUTRALS = 4  # n_neutral is clamped here: 4, 9, 14 are the "N pi0" buckets
 MAX_PRONGS = 3
@@ -75,12 +76,18 @@ def decay_mode_from_counts(
     The grid is 5*(n_charged - 1) + min(n_neutral, MAX_NEUTRALS), i.e. 0-4 for
     one prong, 5-9 for two, 10-14 for three.  Anything off it -- more than three
     prongs, or a daughter that is neither hadron nor lepton -- is `rare`.  A tau
-    with no charged hadron but a lepton is LEPTONIC_DECAY_MODE.
+    with no charged nor neutral hadron but a lepton is LEPTONIC_DECAY_MODE, while
+    a tau with charged or neutral hadron and a lepton is MIXED_DECAY_MODE.
     """
     if n_other > 0:
         return rare
+    if n_lepton > 0:
+        if n_charged > 0 or n_neutral > 0:
+            return MIXED_DECAY_MODE
+        else:
+            return LEPTONIC_DECAY_MODE
     if n_charged == 0:
-        return LEPTONIC_DECAY_MODE if n_lepton > 0 else rare
+        return rare
     if n_charged > MAX_PRONGS:
         return rare
     return 5 * (n_charged - 1) + min(n_neutral, MAX_NEUTRALS)

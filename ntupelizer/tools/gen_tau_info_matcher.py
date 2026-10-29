@@ -322,14 +322,45 @@ class GenTauInfoMatcherWithDaughters(GenTauInfoMatcher):
                     daughter_begin[daughter_idx] : daughter_end[daughter_idx]
                 ]
             ]
-            is_meson_to_two_photons = abs(daughter_pdg) == 111 or (
-                abs(daughter_pdg) == 221 and len(immediate_daughters) == 2 and all(
-                    abs(int(event["MCParticles.PDG"][idx])) == 22
-                    for idx in immediate_daughters
+            immediate_daughters_abs_pdg = [
+                abs(int(event["MCParticles.PDG"][idx])) for idx in immediate_daughters
+            ]
+            is_neutral_pion = abs(daughter_pdg) == 111
+            # Use the eta meson (PDG ID 221) directly instead of its decay products if
+            # any of the following is true:
+            #
+            # 1. its decay products feature exactly two photons;
+            # 2. at least one of the decay products features an electron or a muon.
+            #
+            # Note that since eta meson is neutral and doesn't violate lepton flavour,
+            # if there's at least one electron or muon, it follows that there must exist
+            # another electron or muon in the list of decay products. Thuhs, eta
+            # meson is replaced by its decay products only when these decay products
+            # feature charged or neutral pions plus up to one photon. For reference, see
+            # https://pythia8.web.cern.ch/manuals/pythia8315/ParticleData.html (Pythia
+            # version corresponding to key4hep version 2026-04-08) and search for "221".
+            # Thus, eta mesons are not replaced in decay modes yy, pi0yy, eey, mumuy, mumu,
+            # and pi+pi-ee; and are replaced by its decay products when these are either
+            # 3pi0, pi+pi-pi0, or pi+pi-y. This rearrangement is there to prevent mixing
+            # hadronic decay modes with leptonic decay modes (eey, mumuy, mumu, pi+pi-ee)
+            # since eta mesons must always be accompanied by a charged meson in hadronic
+            # tau decays, and to keep neutral pions distinct from eta mesons (yy, eey) at
+            # the truth level since we want to distinguish them from neutral pions which
+            # also decay to yy or eey. Hadronic decay modes 3pi0, pi+pi-pi0 and pi+pi-y
+            # contribute to rather rare decay modes suchs as 3, 4, 11, 12, etc. We replace
+            # the eta meson with its hadronic decay products because the meson is very
+            # short-lived.
+            is_eta_to_nonhadron = abs(daughter_pdg) == 221 and (
+                sum(
+                    abs_pdg == 22 for abs_pdg in immediate_daughters_abs_pdg
+                ) == 2 or any(
+                    abs_pdg in [ 11, 13 ] for abs_pdg in immediate_daughters_abs_pdg
                 )
             )
 
-            if int(generator_status[daughter_idx]) != 2 or is_meson_to_two_photons:
+            if int(generator_status[daughter_idx]) != 2 or \
+                is_neutral_pion or \
+                is_eta_to_nonhadron:
                 return [daughter_idx]
 
             expanded_daughters = []
