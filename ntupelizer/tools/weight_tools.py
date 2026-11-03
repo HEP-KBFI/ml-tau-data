@@ -119,16 +119,8 @@ def lookup_weights(theta_values, p_values, weight_matrix, theta_bin_edges, p_bin
     Values outside the binned range are clipped into the edge bins.
     """
     n_theta, n_p = weight_matrix.shape
-    theta_bin = np.clip(
-        np.digitize(theta_values, (theta_bin_edges[1:] + theta_bin_edges[:-1]) / 2) - 1,
-        0,
-        n_theta - 1,
-    )
-    p_bin = np.clip(
-        np.digitize(p_values, (p_bin_edges[1:] + p_bin_edges[:-1]) / 2) - 1,
-        0,
-        n_p - 1,
-    )
+    theta_bin = np.clip(np.searchsorted(theta_bin_edges, theta_values, side="right") - 1, 0, n_theta - 1)
+    p_bin = np.clip(np.searchsorted(p_bin_edges, p_values, side="right") - 1, 0, n_p - 1)
     return weight_matrix[theta_bin, p_bin]
 
 

@@ -1,4 +1,4 @@
-output_dir: /local/${USER}/1027_ParTauDETR_dataset
+output_dir: /local/${USER}/1103_ParTauDETR_dataset
 temp_dir: /local/${USER}/tmp/ntupelized_tmp # ntupelized batches; kept, so stages 2-5 can be re-run without re-ntupelizing
 ntupelizer_class: DecayProductNtupelizer # or PodioROOTNtuplelizer
 replace_intermediate_mesons: true
@@ -22,6 +22,20 @@ datasets:
         input_dir: "/local/joosep/mlpf/cld/v1.3.0_key4hep_2026-04-08/gen/p8_ee_Z_qq_ecm91/root/"
         file_pattern: "*.root"
         short_name: qq
+        is_signal: false
+        train_frac: 0.9
+
+    p8_ee_Z_mm_ecm91:
+        input_dir: "/local/karl/cld_edm4hep/v1.3.0_key4hep_2026-04-08/p8_ee_Z_mumu_ecm91/root/"
+        file_pattern: "*.root"
+        short_name: mm
+        is_signal: false
+        train_frac: 0.9
+
+    p8_bhabha_ecm91:
+        input_dir: "/local/karl/cld_edm4hep/v1.3.0_key4hep_2026-04-08/bhwide_ecm91/root/"
+        file_pattern: "*.root"
+        short_name: bhabha
         is_signal: false
         train_frac: 0.9
 weights:

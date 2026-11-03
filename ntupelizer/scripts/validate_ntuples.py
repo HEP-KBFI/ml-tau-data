@@ -1,20 +1,19 @@
 """Produce validation plots for the weighted ntuple outputs.
 
-Reads the flat weighted parquet files produced by apply_weights.py, then:
-  - calls plot_weighting_results  : pT / eta / theta / p distributions,
-                                    unweighted and weighted, signal vs bkg
-  - calls plot_distributions      : any extra per-variable comparison you pass
-                                    via --variables
+Reads the weighted parquet chunks produced by the merge stage, then compares
+all samples on the weight-matrix (theta, p) bins. Detailed plots compare
+signal with each background separately.
 
-The signal dataset is identified by --signal-file, background by --bkg-file.
+Each background is identified by its short name and first train chunk.
 
 Usage:
-    validate_ntuples.py -s <signal_file> -b <bkg_file> -o <output_dir>
+    validate_ntuples.py -s <signal_file> (-b <named_background>)... -w <weights_dir> -o <output_dir>
 
 Options:
     -s <signal_file>   Weighted signal parquet (e.g. z_train_00000.parquet). Loaded
                        in full, so pass a single chunk rather than a whole split.
-    -b <bkg_file>      Weighted background parquet (e.g. qq_train_00000.parquet).
+    -b <named_background> Background as <name>:<file>; repeat for every sample.
+    -w <weights_dir>     Directory containing p_edges.npy and theta_edges.npy.
     -o <output_dir>    Directory where plots will be written.
 """
 
@@ -22,6 +21,7 @@ import os
 import sys
 import numpy as np
 import awkward as ak
+import matplotlib.pyplot as plt
 from pathlib import Path
 from docopt import docopt
 
@@ -31,20 +31,57 @@ import general as g
 import data_integrity as di
 
 
-if __name__ == "__main__":
-    args = docopt(__doc__)
+def plot_all_sample_weights(samples, weights_dir, output_dir):
+    theta_edges = np.load(os.path.join(weights_dir, "theta_edges.npy"))
+    p_edges = np.load(os.path.join(weights_dir, "p_edges.npy"))
+    histograms = {}
+    for name, path in samples.items():
+        data = ak.from_parquet(path, columns=["gen_jet_p4", "cls_weight"])
+        theta, p = wt.gen_jet_theta_p(data)
+        weights = np.asarray(ak.to_numpy(data["cls_weight"]))
+        unweighted = np.histogram2d(theta, p, bins=(theta_edges, p_edges))[0]
+        weighted = np.histogram2d(theta, p, bins=(theta_edges, p_edges), weights=weights)[0]
+        if not unweighted.sum() or not weighted.sum():
+            raise ValueError(f"No weighted jets in the configured (theta, p) range for {name}")
+        histograms[name] = (unweighted / unweighted.sum(), weighted / weighted.sum())
 
-    signal_file = args["-s"]
-    bkg_file = args["-b"]
-    output_dir = args["-o"]
+    fig, axes = plt.subplots(
+        2, len(samples), figsize=(4 * len(samples), 8), squeeze=False,
+        constrained_layout=True,
+    )
+    for row, title in enumerate(("Unweighted", "Weighted")):
+        maximum = max(pair[row].max() for pair in histograms.values())
+        for col, (name, pair) in enumerate(histograms.items()):
+            ax = axes[row, col]
+            image = ax.pcolormesh(p_edges, theta_edges, pair[row], vmin=0, vmax=maximum)
+            caption = f"{name} ({title})"
+            if row == 1 and name != "signal":
+                difference = 0.5 * np.abs(pair[1] - histograms["signal"][1]).sum()
+                caption += f"; difference={difference:.3f}"
+                print(f"Weighted 2D shape difference (signal vs {name}): {difference:.4f}")
+            ax.set_title(caption)
+            ax.set_xlabel("p [GeV]")
+            ax.set_ylabel("theta [degrees]")
+        fig.colorbar(image, ax=axes[row, :].tolist(), label="Fraction / bin")
+    fig.savefig(os.path.join(output_dir, "all_samples_theta_p.pdf"))
+    plt.close(fig)
 
-    os.makedirs(output_dir, exist_ok=True)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
+    for name, (_, weighted) in histograms.items():
+        theta_projection = weighted.sum(axis=1)
+        p_projection = weighted.sum(axis=0)
+        axes[0].step(theta_edges, np.r_[theta_projection, 0], where="post", label=name)
+        axes[1].step(p_edges, np.r_[p_projection, 0], where="post", label=name)
+    for ax, xlabel in zip(axes, ("theta [degrees]", "p [GeV]")):
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Weighted fraction / bin")
+        ax.legend()
+    fig.savefig(os.path.join(output_dir, "all_samples_weighted_projections.pdf"))
+    plt.close(fig)
 
-    # ── load data ─────────────────────────────────────────────────────────────
-    sig_data = ak.from_parquet(signal_file)
-    bkg_data = ak.from_parquet(bkg_file)
 
-    # ── extract per-event weights (added by apply_weights.py) ─────────────────
+def plot_pair(sig_data, bkg_data, output_dir):
+    # ── extract per-event weights (added by the merge stage) ──────────────────
     sig_weights = np.asarray(ak.to_numpy(sig_data["cls_weight"]))
     bkg_weights = np.asarray(ak.to_numpy(bkg_data["cls_weight"]))
 
@@ -86,8 +123,6 @@ if __name__ == "__main__":
         )
 
     # ── data integrity plots (signal and background overlaid) ─────────────────
-    import matplotlib.pyplot as plt
-
     def save_overlay(plot_fn, output_name, is_2d=False, **kwargs):
         fig, ax = plt.subplots(figsize=(7, 5.5))
         if is_2d:
@@ -180,3 +215,21 @@ if __name__ == "__main__":
     plt.close("all")
 
     print(f"Validation plots written to {output_dir}")
+
+
+if __name__ == "__main__":
+    args = docopt(__doc__)
+
+    signal_file = args["-s"]
+    bkg_files = dict(value.split(":", 1) for value in args["-b"])
+    weights_dir = args["-w"]
+    output_dir = args["-o"]
+
+    os.makedirs(output_dir, exist_ok=True)
+    plot_all_sample_weights({"signal": signal_file, **bkg_files}, weights_dir, output_dir)
+
+    sig_data = ak.from_parquet(signal_file)
+    for name, bkg_file in bkg_files.items():
+        pair_dir = os.path.join(output_dir, f"signal_vs_{name}")
+        os.makedirs(pair_dir, exist_ok=True)
+        plot_pair(sig_data, ak.from_parquet(bkg_file), pair_dir)

@@ -9,7 +9,7 @@ The workflow is managed by **Snakemake** and consists of four stages:
 1. **ntupelize** — process each input ROOT file into a per-file Parquet, then concatenate the batch into one. One SLURM job handles `files_per_job` ROOT files (default 20), processed sequentially
 2. **weights** — accumulate the `(p, theta)` reweighting matrices. Only the `gen_jet_p4` column is read, so this runs directly on the ntupelized batches, before any merging
 3. **merge\_and\_split** — stream the ntupelized batches of each dataset into `train` / `test` chunk files of `chunk_size` events, weighting them as they are filled
-4. **validation** — produce summary plots comparing signal and background distributions
+4. **validation** — compare every sample's weighted kinematic shapes, plus detailed signal-versus-each-background plots
 
 Stage 3 reads each event once and writes it once. It pulls one row group at a
 time from the batches, assigns each event to train or test, and appends it to
@@ -34,6 +34,21 @@ Two consequences of streaming are worth knowing:
   distributions are statistically the same; restricting them to the train split
   would mean materialising that split first.
 
+Weights are computed separately for every background dataset in the workflow
+configuration. The signal and every background histogram are normalized to
+unit area; their binwise minimum is the shared target distribution. Each
+`weights/bkg_<short_name>_weights.npy` and `weights/sig_weights.npy` divides
+that target by its own sample's histogram. Within the configured histogram
+range, this makes every class have the same weighted `(theta, p)` shape,
+whether backgrounds are treated as separate classes or grouped into one
+binary background class. Events outside that range are clipped into edge bins
+when weights are applied, so they are not covered by the shape guarantee.
+Bins absent from any sample get zero weight in every sample, so sparse samples
+can reduce the usable phase space. Training still needs separate class
+normalization or sampling to choose the relative contribution of each class.
+The configured `n_files_per_sample` limits the number of events read **per
+dataset** when positive. Every background merge uses its own matrix.
+
 Final outputs land in `output_dir` (configured in `ntupelizer/config/workflow.yaml`):
 
 ```
@@ -47,6 +62,16 @@ Final outputs land in `output_dir` (configured in `ntupelizer/config/workflow.ya
   validation/            # validation plots
   .markers/              # Snakemake completion markers (see below)
 ```
+
+The validation stage uses the first train chunk of every dataset. Its
+`all_samples_theta_p.pdf` shows each sample's unweighted and weighted
+`(theta, p)` fractions on the weight-matrix bin edges; weighted panels report
+their 2D shape difference from signal (zero means identical on this chunk).
+`all_samples_weighted_projections.pdf` overlays the weighted theta and p
+distributions for all samples. The detailed plots for each background live in
+`validation/signal_vs_<short_name>/` (for example `signal_vs_qq/`), so no pair
+overwrites another. Events outside the configured bin ranges are not included
+in the all-sample shape comparisons.
 
 Every split is a numbered series of files starting at `_00000`. The index is
 zero-padded to five digits, so a plain lexicographic listing is already in chunk

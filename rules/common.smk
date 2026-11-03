@@ -32,7 +32,8 @@ SHORT_NAMES = {ds: cfg["short_name"] for ds, cfg in DATASETS.items()}
 
 # Identify which datasets are signal and which are background from config.
 SIG_DATASET = next(ds for ds, cfg in DATASETS.items() if cfg["is_signal"])
-BKG_DATASET = next(ds for ds, cfg in DATASETS.items() if not cfg["is_signal"])
+BKG_DATASETS = [ds for ds, cfg in DATASETS.items() if not cfg["is_signal"]]
+BKG_DATASET = BKG_DATASETS[0]
 
 # Single shared directory for weight matrices and bin-edge arrays.
 WEIGHTS_DIR = f"{OUTPUT_DIR}/weights"

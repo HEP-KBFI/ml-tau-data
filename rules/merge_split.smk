@@ -24,9 +24,11 @@ for _ds, _cfg in DATASETS.items():
             # closure problem inside a for-loop.
             batches  = lambda wc, ds=_ds: ntupelized_files_for(ds),
             sig_w    = f"{WEIGHTS_DIR}/sig_weights.npy",
-            bkg_w    = f"{WEIGHTS_DIR}/bkg_weights.npy",
+            bkg_w    = f"{WEIGHTS_DIR}/bkg_{_short}_weights.npy" if not _cfg["is_signal"] else f"{WEIGHTS_DIR}/sig_weights.npy",
             p_edges  = f"{WEIGHTS_DIR}/p_edges.npy",
             th_edges = f"{WEIGHTS_DIR}/theta_edges.npy",
+            script   = "ntupelizer/scripts/merge_files.py",
+            lookup   = "ntupelizer/tools/weight_tools.py",
         output:
             # One marker per split, plus the first chunk of each, which the
             # validation stage reads directly.
@@ -40,7 +42,7 @@ for _ds, _cfg in DATASETS.items():
             chunk_size  = CHUNK_SIZE,
             row_group   = ROW_GROUP_SIZE,
             split_seed  = SPLIT_SEED,
-            side        = "sig" if _cfg["is_signal"] else "bkg",
+            side        = "sig" if _cfg["is_signal"] else f"bkg_{_short}",
             weights_dir = WEIGHTS_DIR,
             container   = CONTAINER,
         resources:

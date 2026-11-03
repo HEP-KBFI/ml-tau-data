@@ -16,23 +16,23 @@ Inputs may be chunked: pointing -i/-b at a directory of
 writes one output file per input file, keeping the chunk filenames unchanged.
 
 Usage:
-    apply_weights.py -i <signal> -b <background> -w <weights_dir> -o <output_dir>
+    apply_weights.py -i <signal> -b <named_background> -w <weights_dir> -o <output_dir>
                      [-t <split>] [--row-group-size <n>] [-p]
 
 Options:
-    -i <signal>         Signal input: a single parquet file, or a directory of
-                        chunked files (e.g. z_train_00000.parquet, z_train_00001.parquet).
-    -b <background>     Background input, same two forms as -i.
-    -w <weights_dir>    Directory containing sig_weights.npy, bkg_weights.npy,
-                        pt_edges.npy and theta_edges.npy (produced by
-                        compute_weights.py).
-    -o <output_dir>     Directory for the output parquet files. Output filenames
-                        match the input filenames.
-    -t <split>          Split to select when -i/-b are directories.
-                        [default: train]
-    --row-group-size <n>  Rows per parquet row group, and per streamed batch.
-                        [default: 1024]
-    -p                  Produce a weight distribution plot. [default: False]
+    -i <signal>            Signal input: a single parquet file, or a directory of
+                           chunked files (e.g. z_train_00000.parquet, z_train_00001.parquet).
+    -b <named_background>  Background as <name>:<path>, same input forms as -i.
+    -w <weights_dir>       Directory containing sig_weights.npy, bkg_<name>_weights.npy,
+                           p_edges.npy and theta_edges.npy (produced by
+                           compute_weights.py).
+    -o <output_dir>        Directory for the output parquet files. Output filenames
+                           match the input filenames.
+    -t <split>             Split to select when -i/-b are directories.
+                           [default: train]
+    --row-group-size <n>   Rows per parquet row group, and per streamed batch.
+                           [default: 1024]
+    -p                     Produce a weight distribution plot. [default: False]
 """
 
 import os
@@ -65,10 +65,8 @@ def _compute_weights_from_struct(p4_struct, weight_matrix, theta_edges, p_edges)
     """Compute per-jet weights from a gen_jet_p4 struct column (pyarrow-native)."""
     theta, p = _gen_jet_theta_p(p4_struct)
     n_theta, n_p = weight_matrix.shape
-    theta_centers = (theta_edges[1:] + theta_edges[:-1]) / 2
-    p_centers = (p_edges[1:] + p_edges[:-1]) / 2
-    theta_bin = np.clip(np.digitize(theta, theta_centers) - 1, 0, n_theta - 1)
-    p_bin = np.clip(np.digitize(p, p_centers) - 1, 0, n_p - 1)
+    theta_bin = np.clip(np.searchsorted(theta_edges, theta, side="right") - 1, 0, n_theta - 1)
+    p_bin = np.clip(np.searchsorted(p_edges, p, side="right") - 1, 0, n_p - 1)
     return weight_matrix[theta_bin, p_bin]
 
 
@@ -119,7 +117,7 @@ if __name__ == "__main__":
     args = docopt(__doc__)
 
     sig_path = args["-i"]
-    bkg_path = args["-b"]
+    bkg_name, bkg_path = args["-b"].split(":", 1)
     weights_dir = args["-w"]
     output_dir = args["-o"]
     split = args["-t"] or "train"
@@ -128,7 +126,7 @@ if __name__ == "__main__":
 
     # ── load weight matrices and bin edges ────────────────────────────────────
     sig_weight_matrix = np.load(os.path.join(weights_dir, "sig_weights.npy"))
-    bkg_weight_matrix = np.load(os.path.join(weights_dir, "bkg_weights.npy"))
+    bkg_weight_matrix = np.load(os.path.join(weights_dir, f"bkg_{bkg_name}_weights.npy"))
     pt_edges = np.load(os.path.join(weights_dir, "p_edges.npy"))
     theta_edges = np.load(os.path.join(weights_dir, "theta_edges.npy"))
 

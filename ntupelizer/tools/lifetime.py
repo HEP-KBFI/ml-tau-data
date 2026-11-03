@@ -52,7 +52,7 @@ NUM_TRACK_STATES = 4  # Number of track states stored per track
 
 
 def calc_track_origin_vectorized(
-    phi0: ArrayLike,
+    phi: ArrayLike,
     d0: ArrayLike,
     z0: ArrayLike,
     xr: ArrayLike,
@@ -61,14 +61,16 @@ def calc_track_origin_vectorized(
 ) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
     """
     Calculate track origin points from track parameters (vectorized).
+    For reference, see Eq. (13) in arXiv:1305.7300, and make the substitution:
+    drho = -d0, phi0 = phi - pi / 2. Ignore terms proportional to alpha.
 
     The track origin in the linear approximation:
-        x0 = xr + cos(pi/2 - phi0) * d0 = xr + sin(phi0) * d0
-        y0 = yr - sin(pi/2 - phi0) * d0 = yr - cos(phi0) * d0
+        x0 = xr - sin(phi) * d0
+        y0 = yr + cos(phi) * d0
         z0' = z0 + zr
 
     Args:
-        phi0: Azimuthal angle array
+        phi: Azimuthal angle array
         d0: Transverse impact parameter array
         z0: Longitudinal impact parameter array
         xr, yr, zr: Reference point coordinate arrays
@@ -76,9 +78,8 @@ def calc_track_origin_vectorized(
     Returns:
         Tuple of (x0, y0, z0_prime) coordinate arrays
     """
-    # Note: cos(pi/2 - phi0) = sin(phi0), sin(pi/2 - phi0) = cos(phi0)
-    x0 = xr + np.sin(phi0) * d0
-    y0 = yr - np.cos(phi0) * d0
+    x0 = xr - np.sin(phi) * d0
+    y0 = yr + np.cos(phi) * d0
     z0_prime = z0 + zr
     return x0, y0, z0_prime
 
