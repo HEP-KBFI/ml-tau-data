@@ -49,20 +49,29 @@ def plot_all_sample_weights(samples, weights_dir, output_dir):
         2, len(samples), figsize=(4 * len(samples), 8), squeeze=False,
         constrained_layout=True,
     )
+    colormap = plt.get_cmap("viridis").copy()
+    colormap.set_bad("white")
     for row, title in enumerate(("Unweighted", "Weighted")):
         maximum = max(pair[row].max() for pair in histograms.values())
         for col, (name, pair) in enumerate(histograms.items()):
             ax = axes[row, col]
-            image = ax.pcolormesh(p_edges, theta_edges, pair[row], vmin=0, vmax=maximum)
+            ax.set_facecolor("white")
+            image = ax.pcolormesh(
+                p_edges, theta_edges, np.ma.masked_equal(pair[row], 0),
+                cmap=colormap, vmin=0, vmax=maximum,
+            )
             caption = f"{name} ({title})"
             if row == 1 and name != "signal":
                 difference = 0.5 * np.abs(pair[1] - histograms["signal"][1]).sum()
-                caption += f"; difference={difference:.3f}"
+                caption += f"\ndifference={difference:.3f}"
                 print(f"Weighted 2D shape difference (signal vs {name}): {difference:.4f}")
-            ax.set_title(caption)
-            ax.set_xlabel("p [GeV]")
-            ax.set_ylabel("theta [degrees]")
-        fig.colorbar(image, ax=axes[row, :].tolist(), label="Fraction / bin")
+            ax.set_title(caption, fontsize=11)
+            ax.set_xlabel("p [GeV]", fontsize=10)
+            ax.set_ylabel("theta [degrees]", fontsize=10)
+            ax.tick_params(labelsize=9)
+        colorbar = fig.colorbar(image, ax=axes[row, :].tolist())
+        colorbar.set_label("Fraction / bin", fontsize=10)
+        colorbar.ax.tick_params(labelsize=9)
     fig.savefig(os.path.join(output_dir, "all_samples_theta_p.pdf"))
     plt.close(fig)
 
@@ -75,12 +84,13 @@ def plot_all_sample_weights(samples, weights_dir, output_dir):
     for ax, xlabel in zip(axes, ("theta [degrees]", "p [GeV]")):
         ax.set_xlabel(xlabel)
         ax.set_ylabel("Weighted fraction / bin")
-        ax.legend()
+        ax.legend(facecolor="white", framealpha=1, frameon=True)
     fig.savefig(os.path.join(output_dir, "all_samples_weighted_projections.pdf"))
     plt.close(fig)
 
 
-def plot_pair(sig_data, bkg_data, output_dir):
+def plot_pair(sig_data, bkg_data, output_dir, background_name):
+    background_label = f"Background ({background_name})"
     # ── extract per-event weights (added by the merge stage) ──────────────────
     sig_weights = np.asarray(ak.to_numpy(sig_data["cls_weight"]))
     bkg_weights = np.asarray(ak.to_numpy(bkg_data["cls_weight"]))
@@ -92,6 +102,7 @@ def plot_pair(sig_data, bkg_data, output_dir):
         sig_weights=sig_weights,
         bkg_weights=bkg_weights,
         output_dir=output_dir,
+        bkg_label=background_label,
     )
 
     # ── additional per-variable distributions ─────────────────────────────────
@@ -120,16 +131,18 @@ def plot_pair(sig_data, bkg_data, output_dir):
             bkg_weights_w=bkg_weights / bkg_weights.sum(),
             output_path=os.path.join(output_dir, f"{name}.pdf"),
             xlabel=xlabel,
+            bkg_label=background_label,
         )
 
     # ── data integrity plots (signal and background overlaid) ─────────────────
     def save_overlay(plot_fn, output_name, is_2d=False, **kwargs):
         fig, ax = plt.subplots(figsize=(7, 5.5))
         if is_2d:
-            plot_fn(sig_data, label="Signal", ax=ax, **kwargs)
+            plot_fn(sig_data, label=f"Signal only (paired with {background_name})", ax=ax, **kwargs)
         else:
             plot_fn(sig_data, label="Signal", ax=ax, color="red", **kwargs)
-            plot_fn(bkg_data, label="Background", ax=ax, color="blue", **kwargs)
+            plot_fn(bkg_data, label=background_label, ax=ax, color="blue", **kwargs)
+            ax.legend(facecolor="white", framealpha=1, frameon=True)
         plt.tight_layout()
         fig.savefig(os.path.join(output_dir, output_name), bbox_inches="tight")
         plt.close(fig)
@@ -162,7 +175,7 @@ def plot_pair(sig_data, bkg_data, output_dir):
             )
             di.plot_lifetime_variable(
                 bkg_data,
-                label="Background",
+                label=background_label,
                 ax=ax,
                 color="blue",
                 variable=var,
@@ -170,13 +183,14 @@ def plot_pair(sig_data, bkg_data, output_dir):
             )
             ax.set_xscale("log")
             ax.set_yscale("log")
+            ax.legend(facecolor="white", framealpha=1, frameon=True)
             plt.tight_layout()
             fig.savefig(os.path.join(output_dir, f"{var}.pdf"), bbox_inches="tight")
             plt.close(fig)
 
     if "gen_jet_tau_decaymode" in sig_data.fields:
         di.plot_decay_mode_distribution(
-            sig_data, title="Signal decay modes"
+            sig_data, title=f"Signal decay modes (paired with {background_name})"
         ).figure.savefig(
             os.path.join(output_dir, "signal_decay_modes.pdf"), bbox_inches="tight"
         )
@@ -184,7 +198,7 @@ def plot_pair(sig_data, bkg_data, output_dir):
     # ── weight distributions and impact-parameter error overlays ─────────────
     # These used to be produced by apply_weights.py -p; the weights are now
     # applied by the merge stage, so the plots live with the other validation.
-    wt.plot_weight_distributions(sig_weights, bkg_weights, output_dir)
+    wt.plot_weight_distributions(sig_weights, bkg_weights, output_dir, bkg_label=background_label)
 
     INVALID = 0.0  # lifetime.INVALID_VALUE
     error_vars = {
@@ -198,7 +212,7 @@ def plot_pair(sig_data, bkg_data, output_dir):
         fig, ax = plt.subplots(figsize=(7, 5.5))
         for data, label, color in [
             (sig_data, "Signal", "red"),
-            (bkg_data, "Background", "blue"),
+            (bkg_data, background_label, "blue"),
         ]:
             flat = ak.to_numpy(ak.flatten(data[var]))
             flat = flat[flat > INVALID]  # errors of real tracks are > 0
@@ -207,7 +221,7 @@ def plot_pair(sig_data, bkg_data, output_dir):
         ax.set_xscale("log")
         ax.set_xlabel(xlabel)
         ax.set_ylabel("Fraction [a.u.]")
-        ax.legend()
+        ax.legend(facecolor="white", framealpha=1, frameon=True)
         plt.tight_layout()
         fig.savefig(os.path.join(output_dir, f"{var}.pdf"), bbox_inches="tight")
         plt.close(fig)
@@ -232,4 +246,4 @@ if __name__ == "__main__":
     for name, bkg_file in bkg_files.items():
         pair_dir = os.path.join(output_dir, f"signal_vs_{name}")
         os.makedirs(pair_dir, exist_ok=True)
-        plot_pair(sig_data, ak.from_parquet(bkg_file), pair_dir)
+        plot_pair(sig_data, ak.from_parquet(bkg_file), pair_dir, name)
