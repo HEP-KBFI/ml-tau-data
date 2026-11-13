@@ -41,4 +41,4 @@ datasets:
 weights:
     produce_plots: True
     add_weights: True
-    n_files_per_sample: 100000
+    n_files_per_sample: 1_000_000
