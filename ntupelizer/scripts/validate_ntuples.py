@@ -1,20 +1,19 @@
 """Produce validation plots for the weighted ntuple outputs.
 
-Reads the flat weighted parquet files produced by apply_weights.py, then:
-  - calls plot_weighting_results  : pT / eta / theta / p distributions,
-                                    unweighted and weighted, signal vs bkg
-  - calls plot_distributions      : any extra per-variable comparison you pass
-                                    via --variables
+Reads the weighted parquet chunks produced by the merge stage, then compares
+all samples on the weight-matrix (theta, p) bins. Detailed plots compare
+signal with each background separately.
 
-The signal dataset is identified by --signal-file, background by --bkg-file.
+Each background is identified by its short name and first train chunk.
 
 Usage:
-    validate_ntuples.py -s <signal_file> -b <bkg_file> -o <output_dir>
+    validate_ntuples.py -s <signal_file> (-b <named_background>)... -w <weights_dir> -o <output_dir>
 
 Options:
     -s <signal_file>   Weighted signal parquet (e.g. z_train_00000.parquet). Loaded
                        in full, so pass a single chunk rather than a whole split.
-    -b <bkg_file>      Weighted background parquet (e.g. qq_train_00000.parquet).
+    -b <named_background> Background as <name>:<file>; repeat for every sample.
+    -w <weights_dir>     Directory containing p_edges.npy and theta_edges.npy.
     -o <output_dir>    Directory where plots will be written.
 """
 
@@ -22,6 +21,7 @@ import os
 import sys
 import numpy as np
 import awkward as ak
+import matplotlib.pyplot as plt
 from pathlib import Path
 from docopt import docopt
 
@@ -31,20 +31,67 @@ import general as g
 import data_integrity as di
 
 
-if __name__ == "__main__":
-    args = docopt(__doc__)
+def plot_all_sample_weights(samples, weights_dir, output_dir):
+    theta_edges = np.load(os.path.join(weights_dir, "theta_edges.npy"))
+    p_edges = np.load(os.path.join(weights_dir, "p_edges.npy"))
+    histograms = {}
+    for name, path in samples.items():
+        data = ak.from_parquet(path, columns=["gen_jet_p4", "cls_weight"])
+        theta, p = wt.gen_jet_theta_p(data)
+        weights = np.asarray(ak.to_numpy(data["cls_weight"]))
+        unweighted = np.histogram2d(theta, p, bins=(theta_edges, p_edges))[0]
+        weighted = np.histogram2d(theta, p, bins=(theta_edges, p_edges), weights=weights)[0]
+        if not unweighted.sum() or not weighted.sum():
+            raise ValueError(f"No weighted jets in the configured (theta, p) range for {name}")
+        histograms[name] = (unweighted / unweighted.sum(), weighted / weighted.sum())
 
-    signal_file = args["-s"]
-    bkg_file = args["-b"]
-    output_dir = args["-o"]
+    fig, axes = plt.subplots(
+        2, len(samples), figsize=(4 * len(samples), 8), squeeze=False,
+        constrained_layout=True,
+    )
+    colormap = plt.get_cmap("viridis").copy()
+    colormap.set_bad("white")
+    for row, title in enumerate(("Unweighted", "Weighted")):
+        maximum = max(pair[row].max() for pair in histograms.values())
+        for col, (name, pair) in enumerate(histograms.items()):
+            ax = axes[row, col]
+            ax.set_facecolor("white")
+            image = ax.pcolormesh(
+                p_edges, theta_edges, np.ma.masked_equal(pair[row], 0),
+                cmap=colormap, vmin=0, vmax=maximum,
+            )
+            caption = f"{name} ({title})"
+            if row == 1 and name != "signal":
+                difference = 0.5 * np.abs(pair[1] - histograms["signal"][1]).sum()
+                caption += f"\ndifference={difference:.3f}"
+                print(f"Weighted 2D shape difference (signal vs {name}): {difference:.4f}")
+            ax.set_title(caption, fontsize=11)
+            ax.set_xlabel("p [GeV]", fontsize=10)
+            ax.set_ylabel("theta [degrees]", fontsize=10)
+            ax.tick_params(labelsize=9)
+        colorbar = fig.colorbar(image, ax=axes[row, :].tolist())
+        colorbar.set_label("Fraction / bin", fontsize=10)
+        colorbar.ax.tick_params(labelsize=9)
+    fig.savefig(os.path.join(output_dir, "all_samples_theta_p.pdf"))
+    plt.close(fig)
 
-    os.makedirs(output_dir, exist_ok=True)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
+    for name, (_, weighted) in histograms.items():
+        theta_projection = weighted.sum(axis=1)
+        p_projection = weighted.sum(axis=0)
+        axes[0].step(theta_edges, np.r_[theta_projection, 0], where="post", label=name)
+        axes[1].step(p_edges, np.r_[p_projection, 0], where="post", label=name)
+    for ax, xlabel in zip(axes, ("theta [degrees]", "p [GeV]")):
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Weighted fraction / bin")
+        ax.legend(facecolor="white", framealpha=1, frameon=True)
+    fig.savefig(os.path.join(output_dir, "all_samples_weighted_projections.pdf"))
+    plt.close(fig)
 
-    # ── load data ─────────────────────────────────────────────────────────────
-    sig_data = ak.from_parquet(signal_file)
-    bkg_data = ak.from_parquet(bkg_file)
 
-    # ── extract per-event weights (added by apply_weights.py) ─────────────────
+def plot_pair(sig_data, bkg_data, output_dir, background_name):
+    background_label = f"Background ({background_name})"
+    # ── extract per-event weights (added by the merge stage) ──────────────────
     sig_weights = np.asarray(ak.to_numpy(sig_data["cls_weight"]))
     bkg_weights = np.asarray(ak.to_numpy(bkg_data["cls_weight"]))
 
@@ -55,6 +102,7 @@ if __name__ == "__main__":
         sig_weights=sig_weights,
         bkg_weights=bkg_weights,
         output_dir=output_dir,
+        bkg_label=background_label,
     )
 
     # ── additional per-variable distributions ─────────────────────────────────
@@ -83,18 +131,18 @@ if __name__ == "__main__":
             bkg_weights_w=bkg_weights / bkg_weights.sum(),
             output_path=os.path.join(output_dir, f"{name}.pdf"),
             xlabel=xlabel,
+            bkg_label=background_label,
         )
 
     # ── data integrity plots (signal and background overlaid) ─────────────────
-    import matplotlib.pyplot as plt
-
     def save_overlay(plot_fn, output_name, is_2d=False, **kwargs):
         fig, ax = plt.subplots(figsize=(7, 5.5))
         if is_2d:
-            plot_fn(sig_data, label="Signal", ax=ax, **kwargs)
+            plot_fn(sig_data, label=f"Signal only (paired with {background_name})", ax=ax, **kwargs)
         else:
             plot_fn(sig_data, label="Signal", ax=ax, color="red", **kwargs)
-            plot_fn(bkg_data, label="Background", ax=ax, color="blue", **kwargs)
+            plot_fn(bkg_data, label=background_label, ax=ax, color="blue", **kwargs)
+            ax.legend(facecolor="white", framealpha=1, frameon=True)
         plt.tight_layout()
         fig.savefig(os.path.join(output_dir, output_name), bbox_inches="tight")
         plt.close(fig)
@@ -127,7 +175,7 @@ if __name__ == "__main__":
             )
             di.plot_lifetime_variable(
                 bkg_data,
-                label="Background",
+                label=background_label,
                 ax=ax,
                 color="blue",
                 variable=var,
@@ -135,13 +183,14 @@ if __name__ == "__main__":
             )
             ax.set_xscale("log")
             ax.set_yscale("log")
+            ax.legend(facecolor="white", framealpha=1, frameon=True)
             plt.tight_layout()
             fig.savefig(os.path.join(output_dir, f"{var}.pdf"), bbox_inches="tight")
             plt.close(fig)
 
     if "gen_jet_tau_decaymode" in sig_data.fields:
         di.plot_decay_mode_distribution(
-            sig_data, title="Signal decay modes"
+            sig_data, title=f"Signal decay modes (paired with {background_name})"
         ).figure.savefig(
             os.path.join(output_dir, "signal_decay_modes.pdf"), bbox_inches="tight"
         )
@@ -149,7 +198,7 @@ if __name__ == "__main__":
     # ── weight distributions and impact-parameter error overlays ─────────────
     # These used to be produced by apply_weights.py -p; the weights are now
     # applied by the merge stage, so the plots live with the other validation.
-    wt.plot_weight_distributions(sig_weights, bkg_weights, output_dir)
+    wt.plot_weight_distributions(sig_weights, bkg_weights, output_dir, bkg_label=background_label)
 
     INVALID = 0.0  # lifetime.INVALID_VALUE
     error_vars = {
@@ -163,7 +212,7 @@ if __name__ == "__main__":
         fig, ax = plt.subplots(figsize=(7, 5.5))
         for data, label, color in [
             (sig_data, "Signal", "red"),
-            (bkg_data, "Background", "blue"),
+            (bkg_data, background_label, "blue"),
         ]:
             flat = ak.to_numpy(ak.flatten(data[var]))
             flat = flat[flat > INVALID]  # errors of real tracks are > 0
@@ -172,7 +221,7 @@ if __name__ == "__main__":
         ax.set_xscale("log")
         ax.set_xlabel(xlabel)
         ax.set_ylabel("Fraction [a.u.]")
-        ax.legend()
+        ax.legend(facecolor="white", framealpha=1, frameon=True)
         plt.tight_layout()
         fig.savefig(os.path.join(output_dir, f"{var}.pdf"), bbox_inches="tight")
         plt.close(fig)
@@ -180,3 +229,21 @@ if __name__ == "__main__":
     plt.close("all")
 
     print(f"Validation plots written to {output_dir}")
+
+
+if __name__ == "__main__":
+    args = docopt(__doc__)
+
+    signal_file = args["-s"]
+    bkg_files = dict(value.split(":", 1) for value in args["-b"])
+    weights_dir = args["-w"]
+    output_dir = args["-o"]
+
+    os.makedirs(output_dir, exist_ok=True)
+    plot_all_sample_weights({"signal": signal_file, **bkg_files}, weights_dir, output_dir)
+
+    sig_data = ak.from_parquet(signal_file)
+    for name, bkg_file in bkg_files.items():
+        pair_dir = os.path.join(output_dir, f"signal_vs_{name}")
+        os.makedirs(pair_dir, exist_ok=True)
+        plot_pair(sig_data, ak.from_parquet(bkg_file), pair_dir, name)

@@ -119,16 +119,8 @@ def lookup_weights(theta_values, p_values, weight_matrix, theta_bin_edges, p_bin
     Values outside the binned range are clipped into the edge bins.
     """
     n_theta, n_p = weight_matrix.shape
-    theta_bin = np.clip(
-        np.digitize(theta_values, (theta_bin_edges[1:] + theta_bin_edges[:-1]) / 2) - 1,
-        0,
-        n_theta - 1,
-    )
-    p_bin = np.clip(
-        np.digitize(p_values, (p_bin_edges[1:] + p_bin_edges[:-1]) / 2) - 1,
-        0,
-        n_p - 1,
-    )
+    theta_bin = np.clip(np.searchsorted(theta_bin_edges, theta_values, side="right") - 1, 0, n_theta - 1)
+    p_bin = np.clip(np.searchsorted(p_bin_edges, p_values, side="right") - 1, 0, n_p - 1)
     return weight_matrix[theta_bin, p_bin]
 
 
@@ -156,7 +148,7 @@ def process_single_file(input_path, weight_matrix, theta_bin_edges, p_bin_edges,
     return weights
 
 
-def plot_weighting_results(signal_data, bkg_data, sig_weights, bkg_weights, output_dir):
+def plot_weighting_results(signal_data, bkg_data, sig_weights, bkg_weights, output_dir, bkg_label="Background"):
     tau_mask = signal_data.gen_jet_tau_decaymode != -1
     sig_data = signal_data[tau_mask]
     sig_weights = np.asarray(sig_weights)[np.asarray(tau_mask)]
@@ -167,19 +159,18 @@ def plot_weighting_results(signal_data, bkg_data, sig_weights, bkg_weights, outp
     sig_p4s = g.reinitialize_p4(sig_data.gen_jet_p4)
 
     variables = [
-        (sig_p4s.pt, bkg_p4s.pt, r"$p_T$ [GeV]", "pt", True, 30),
-        (sig_p4s.eta, bkg_p4s.eta, r"$\eta$", "eta", False, None),
-        (sig_p4s.p, bkg_p4s.p, r"$p$ [GeV]", "p", True, 30),
+        (sig_p4s.pt, bkg_p4s.pt, r"$p_T$ [GeV]", "pt", 30),
+        (sig_p4s.eta, bkg_p4s.eta, r"$\eta$", "eta", None),
+        (sig_p4s.p, bkg_p4s.p, r"$p$ [GeV]", "p", 30),
         (
             np.rad2deg(sig_p4s.theta.to_numpy()),
             np.rad2deg(bkg_p4s.theta.to_numpy()),
             r"$\theta$ [$^{o}$]",
             "theta",
-            False,
             50,
         ),
     ]
-    for sig_vals, bkg_vals, xlabel, name, produce_label, x_tick in variables:
+    for sig_vals, bkg_vals, xlabel, name, x_tick in variables:
         plot_distributions(
             sig_values=sig_vals,
             bkg_values=bkg_vals,
@@ -189,8 +180,8 @@ def plot_weighting_results(signal_data, bkg_data, sig_weights, bkg_weights, outp
             bkg_weights_w=bkg_weights / bkg_weights.sum(),
             output_path=os.path.join(output_dir, f"{name}_normalized.pdf"),
             xlabel=xlabel,
-            produce_label=produce_label,
             x_maj_tick_spacing=x_tick,
+            bkg_label=bkg_label,
         )
 
 
@@ -205,6 +196,7 @@ def plot_distributions(
     xlabel=r"$p_T [GeV]$",
     produce_label=True,
     x_maj_tick_spacing=30,
+    bkg_label="Background",
 ):
     mpl.rcParams.update(mpl.rcParamsDefault)
     hep.style.use(hep.styles.CMS)
@@ -235,7 +227,7 @@ def plot_distributions(
             bkg_hist,
             bins=bin_edges,
             histtype="step",
-            label="Background",
+            label=bkg_label,
             hatch="//",
             color="blue",
             ax=ax,
@@ -250,14 +242,14 @@ def plot_distributions(
         if x_maj_tick_spacing is not None:
             ax.xaxis.set_major_locator(ticker.MultipleLocator(x_maj_tick_spacing))
         if produce_label:
-            ax.legend(fontsize=20)
+            ax.legend(fontsize=20, facecolor="white", framealpha=1, frameon=True)
 
     plt.tight_layout()
     plt.savefig(output_path, bbox_inches="tight")
     plt.close("all")
 
 
-def plot_weight_distributions(signal_weights, bkg_weights, output_dir):
+def plot_weight_distributions(signal_weights, bkg_weights, output_dir, bkg_label="Quark/gluon jets"):
     mpl.rcParams.update(mpl.rcParamsDefault)
     hep.style.use(hep.styles.CMS)
     bin_edges = np.linspace(start=0, stop=1, num=51)
@@ -266,11 +258,11 @@ def plot_weight_distributions(signal_weights, bkg_weights, output_dir):
     sig_hist_ = np.histogram(signal_weights, bins=bin_edges)[0]
     sig_hist = sig_hist_ / np.sum(sig_hist_)
     fig, ax = plt.subplots(nrows=1, ncols=1)
-    hep.histplot(bkg_hist, bin_edges, label="Quark/gluon jets", hatch="//", color="red")
+    hep.histplot(bkg_hist, bin_edges, label=bkg_label, hatch="//", color="red")
     hep.histplot(sig_hist, bin_edges, label=r"$\tau_h$", hatch="\\\\", color="blue")
     plt.xlabel("Weight", fontdict={"size": 30})
     plt.ylabel("Relative yield / bin", fontdict={"size": 30})
-    plt.legend()
+    plt.legend(facecolor="white", framealpha=1, frameon=True)
     ax.set_facecolor("white")
     output_path = os.path.join(output_dir, "weight_1D_distribution.pdf")
     plt.savefig(output_path)

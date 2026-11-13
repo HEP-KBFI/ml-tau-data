@@ -15,7 +15,7 @@ Options:
                            compute_weights.py. When given, a cls_weight column is
                            added to the output as it is written; without it the
                            output is unweighted.
-    --side <side>          Which matrix of <weights_dir> to apply, "sig" or "bkg".
+    --side <side>          Which matrix of <weights_dir> to apply, "sig" or "bkg_<short_name>".
                            Required together with -w.
     --chunk-size <n>       Number of events (rows) per output .parquet file.
                            Each split is written as a numbered series of files of
@@ -305,13 +305,13 @@ def load_weighter(weights_dir, side):
     """Return a callable adding per-jet weights, or None if no weights are given.
 
     The returned function takes a merged ntuple array and returns the cls_weight
-    column for it, looked up in the (theta, p) matrix of `side` ("sig"/"bkg")
+    column for it, looked up in the (theta, p) matrix of `side` ("sig"/"bkg_<short_name>")
     that compute_weights.py wrote to `weights_dir`.
     """
     if not weights_dir:
         return None
-    if side not in ("sig", "bkg"):
-        raise ValueError(f"--side must be 'sig' or 'bkg' when -w is given, got {side!r}")
+    if side != "sig" and not side.startswith("bkg_"):
+        raise ValueError(f"--side must be 'sig' or 'bkg_<short_name>' when -w is given, got {side!r}")
     weight_matrix = np.load(os.path.join(weights_dir, f"{side}_weights.npy"))
     p_edges = np.load(os.path.join(weights_dir, "p_edges.npy"))
     theta_edges = np.load(os.path.join(weights_dir, "theta_edges.npy"))

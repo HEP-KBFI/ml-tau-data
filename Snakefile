@@ -59,3 +59,4 @@ rule all:
         [chunks_marker(SHORT_NAMES[ds], split) for ds in DATASETS for split in SPLITS],
         f"{OUTPUT_DIR}/validation/.done",
         f"{WEIGHTS_DIR}/sig_weights.npy",
+        [f"{WEIGHTS_DIR}/bkg_{SHORT_NAMES[ds]}_weights.npy" for ds in BKG_DATASETS],

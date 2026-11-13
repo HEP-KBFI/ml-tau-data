@@ -1,11 +1,11 @@
 weighting:
   variables:
     p:
-      range: [2, 55]
-      n_bins: 53
+      range: [1, 55]
+      n_bins: 54
     eta:
       range: [-2.8, 2.8]
-      n_bins: 27
+      n_bins: 28
     theta:
       range: [10, 170]
-      n_bins: 41
+      n_bins: 40

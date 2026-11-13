@@ -136,14 +136,11 @@ class EDM4HEPNtupelizer:
         reco_jets, reco_constituent_indices = cl.RecoJetClusterer(
             particles=reco_particles, particles_p4=reco_particles_p4
         ).results
-        # Leptonic tau decays are dropped from signal by default.  They are
-        # removed in three places, and all three have to be switched off to
-        # keep them: gen jets with an e/mu constituent are never formed (this is
-        # the one that actually does the work), jets with a reconstructed e/mu
-        # candidate are vetoed, and gen_jet_tau_decaymode == 16 is cut.
-        # Background samples are always treated the default way -- so with the
-        # switch on, a lepton in the jet identifies signal (see README).
-        keep_leptonic_taus = signal_sample and bool(
+        # By default, gen jets with an e/mu constituent are removed before
+        # matching, and reco jets with an e/mu candidate are vetoed below.
+        # include_leptonic_tau_decays retains these jets for any sample; for
+        # signal, it also keeps leptonic and mixed tau decay modes below.
+        keep_leptonic_taus = bool(
             self.cfg.get("include_leptonic_tau_decays", False)
         )
         print("Clustering gen jets ...")

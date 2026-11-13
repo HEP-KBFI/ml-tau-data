@@ -1,4 +1,4 @@
-"""Compute pT/theta weight matrices for a signal and a background sample.
+"""Compute theta/p weight matrices for signal and every background sample.
 
 Bins are read from the Hydra config 'weighting' (ntupelizer/config/weighting.yaml).
 Operational parameters map directly to the keys under 'weights:' in workflow.yaml.
@@ -15,14 +15,15 @@ statistically the same; computing it from the train split alone would require
 materialising that split first, i.e. an extra full pass over the data.
 
 Usage:
-    compute_weights.py -i <signal> -b <background> -o <output_dir>
+    compute_weights.py -i <signal> (-b <named_background>)... -o <output_dir>
                        [-t <split>] [-n <n_events>] [-p]
 
 Options:
     -i <signal>            Signal input: either a single parquet file or a
                            directory of parquet files, all of which are then
                            histogrammed.
-    -b <background>        Background input, same two forms as -i.
+    -b <named_background> Background input as <name>:<path>; path may be a
+                          file or directory. Repeat for each background sample.
     -o <output_dir>        Directory where weight matrices (.npy) and optional
                            plots will be written.
     -t <split>             Consider only the chunks of this split when -i/-b are
@@ -85,7 +86,7 @@ if __name__ == "__main__":
     args = docopt(__doc__)
 
     signal_input = args["-i"]
-    bkg_input = args["-b"]
+    bkg_inputs = dict(value.split(":", 1) for value in args["-b"])
     output_dir = args["-o"]
     split = args["-t"]
     n_files = int(args["-n"]) if args["-n"] else -1
@@ -93,20 +94,13 @@ if __name__ == "__main__":
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # Skip computation if the weight matrices already exist.
     sig_out = os.path.join(output_dir, "sig_weights.npy")
-    bkg_out = os.path.join(output_dir, "bkg_weights.npy")
+    bkg_outputs = {
+        name: os.path.join(output_dir, f"bkg_{name}_weights.npy")
+        for name in bkg_inputs
+    }
     p_edges_out = os.path.join(output_dir, "p_edges.npy")
     theta_edges_out = os.path.join(output_dir, "theta_edges.npy")
-    if (
-        os.path.exists(sig_out)
-        and os.path.exists(bkg_out)
-        and os.path.exists(p_edges_out)
-        and os.path.exists(theta_edges_out)
-    ):
-        print(f"Weight matrices already exist in {output_dir}, skipping computation.")
-        sys.exit(0)
-
     # ── load Hydra config for bin edges ───────────────────────────────────────
     config_dir = str(Path(__file__).resolve().parents[1] / "config")
     with initialize_config_dir(config_dir=config_dir, job_name="compute_weights"):
@@ -118,43 +112,52 @@ if __name__ == "__main__":
 
     # ── resolve a directory of inputs (or a single file) ──────────────────────
     sig_paths = g.split_chunk_paths(signal_input, split)
-    bkg_paths = g.split_chunk_paths(bkg_input, split)
+    bkg_paths = {
+        name: g.split_chunk_paths(path, split) for name, path in bkg_inputs.items()
+    }
 
-    # ── accumulate normalised 2-D histograms (theta × pT) incrementally ───────
+    # ── accumulate normalised 2-D histograms (theta × p) incrementally ────────
     sig_hist = _accumulate_gen_jet_histogram(sig_paths, theta_edges, p_edges, n_files)
-    bkg_hist = _accumulate_gen_jet_histogram(bkg_paths, theta_edges, p_edges, n_files)
+    bkg_hists = {
+        name: _accumulate_gen_jet_histogram(paths, theta_edges, p_edges, n_files)
+        for name, paths in bkg_paths.items()
+    }
 
     sig_matrix = sig_hist / np.sum(sig_hist)
-    bkg_matrix = bkg_hist / np.sum(bkg_hist)
+    bkg_matrices = {name: hist / np.sum(hist) for name, hist in bkg_hists.items()}
+    shared_matrix = np.minimum.reduce([sig_matrix, *bkg_matrices.values()])
+    if not np.any(shared_matrix):
+        raise ValueError("No shared (theta, p) bins across signal and backgrounds")
 
     # ── compute weight matrices ────────────────────────────────────────────────
-    # Signal weights: reweight signal to look like background
     sig_weight_matrix = wt.get_weight_matrix(
-        target_matrix=sig_matrix, comp_matrix=bkg_matrix
+        target_matrix=sig_matrix, comp_matrix=shared_matrix
     )
-    # Background weights: reweight background to look like signal
-    bkg_weight_matrix = wt.get_weight_matrix(
-        target_matrix=bkg_matrix, comp_matrix=sig_matrix
-    )
+    bkg_weight_matrices = {
+        name: wt.get_weight_matrix(target_matrix=matrix, comp_matrix=shared_matrix)
+        for name, matrix in bkg_matrices.items()
+    }
 
     # ── save matrices ──────────────────────────────────────────────────────────
     np.save(sig_out, sig_weight_matrix)
-    np.save(bkg_out, bkg_weight_matrix)
+    for name, path in bkg_outputs.items():
+        np.save(path, bkg_weight_matrices[name])
+        print(f"Saved background weight matrix → {path}")
 
     # Save bin edges alongside so apply_weights.py can reconstruct the lookup
     np.save(p_edges_out, p_edges)
     np.save(theta_edges_out, theta_edges)
 
     print(f"Saved signal weight matrix  → {sig_out}")
-    print(f"Saved background weight matrix → {bkg_out}")
 
     # ── optional plots ─────────────────────────────────────────────────────────
     if produce_plots:
-        wt.visualize_weights_pair(
-            sig_matrix=sig_weight_matrix,
-            bkg_matrix=bkg_weight_matrix,
-            x_bin_edges=p_edges,
-            y_bin_edges=theta_edges,
-            output_path=os.path.join(output_dir, "weight_matrices.pdf"),
-        )
+        for name, matrix in bkg_weight_matrices.items():
+            wt.visualize_weights_pair(
+                sig_matrix=sig_weight_matrix,
+                bkg_matrix=matrix,
+                x_bin_edges=p_edges,
+                y_bin_edges=theta_edges,
+                output_path=os.path.join(output_dir, f"weight_matrices_{name}.pdf"),
+            )
         print("Saved diagnostic plots.")
